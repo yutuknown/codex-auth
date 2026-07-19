@@ -107,5 +107,9 @@ graph LR
 - **Playwright**: Drives the browser interaction.
 - **Typer & Rich**: Powers the CLI interface.
 
+## 🤝 Contributors
+- [@yutuknown](https://github.com/yutuknown) - Creator & Lead Developer
+- **Antigravity AI** - AI Pair Programmer
+
 ## 📜 License
 Distributed under the MIT License. See `LICENSE` for more information.

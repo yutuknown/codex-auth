@@ -34,10 +34,14 @@ class PlaywrightEngine:
         yield self
         
         logger.info("[API] Shutting down Playwright Engine...")
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
+        try:
+            if self.browser:
+                await self.browser.close()
+            if self.playwright:
+                await self.playwright.stop()
+        except Exception:
+            # Swallow connection closed errors during abrupt Ctrl+C teardowns
+            pass
 
 # Global singleton engine
 engine = PlaywrightEngine()

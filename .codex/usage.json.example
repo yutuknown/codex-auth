@@ -1,0 +1,20 @@
+{
+  "total_requests": 0,
+  "total_input_tokens": 0,
+  "total_output_tokens": 0,
+  "total_savings_usd": 0.0,
+  "models": {
+    "auto": {
+      "requests": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "total_ttft_s": 0.0,
+      "total_generation_s": 0.0
+    },
+    "gpt-4o": {
+      "requests": 0,
+      "input_tokens": 0,
+      "output_tokens": 0
+    }
+  }
+}

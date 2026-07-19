@@ -3,24 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Codex Auth Dashboard</title>
-    <!-- Use Inter for standard text (Vercel aesthetic) and Geist Mono for code/logs (Claude Code aesthetic) -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <title>Codex Auth Console</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-color: #0a0a0a;
-            --surface-color: #111111;
-            --border-color: #333;
-            --text-main: #ededed;
-            --text-muted: #a1a1aa;
-            --accent-color: #3b82f6;
+            /* Dark Theme (Default) */
+            --bg-base: #000000;
+            --bg-surface: #0a0a0a;
+            --bg-surface-hover: #171717;
+            --bg-code: #050505;
+            
+            --border-subtle: #27272a;
+            --border-strong: #3f3f46;
+            
+            --text-primary: #ffffff;
+            --text-secondary: #a1a1aa;
+            --text-tertiary: #52525b;
+            
+            --accent: #ffffff;
+            --bg-blur: rgba(10, 10, 10, 0.8);
+            --sidebar-bg: rgba(5, 5, 5, 0.8);
             
             --log-info: #3b82f6;
-            --log-error: #ef4444;
             --log-warn: #eab308;
+            --log-error: #ef4444;
+            --log-success: #10b981;
             
-            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            --font-mono: 'Fira Code', 'Geist Mono', monospace;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        :root.theme-light {
+            /* Light Theme */
+            --bg-base: #fafafa;
+            --bg-surface: #ffffff;
+            --bg-surface-hover: #f4f4f5;
+            --bg-code: #f4f4f5;
+            
+            --border-subtle: #e4e4e7;
+            --border-strong: #d4d4d8;
+            
+            --text-primary: #18181b;
+            --text-secondary: #52525b;
+            --text-tertiary: #a1a1aa;
+            
+            --accent: #18181b;
+            --bg-blur: rgba(255, 255, 255, 0.8);
+            --sidebar-bg: rgba(255, 255, 255, 0.8);
+        }
+
+        ::view-transition-old(root),
+        ::view-transition-new(root) {
+            animation: none;
+            mix-blend-mode: normal;
         }
 
         * {
@@ -30,163 +65,252 @@
         }
 
         body {
-            background-color: #000;
-            color: var(--text-main);
+            background-color: var(--bg-base);
+            /* Subtle dot matrix background */
+            background-image: radial-gradient(circle at center, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 24px 24px;
+            color: var(--text-primary);
             font-family: var(--font-sans);
             display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
-
-        /* Disconnected Banner */
-        #disconnected-banner {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background-color: var(--log-error);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: 500;
-            z-index: 1000;
-            display: none;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            align-items: center;
-            gap: 8px;
-        }
-
-        /* macOS Style Terminal Window */
-        .window {
-            width: 100%;
-            max-width: 1000px;
-            background-color: var(--bg-color);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+            height: 100vh;
             overflow: hidden;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* --- Sidebar Navigation --- */
+        .sidebar {
+            width: var(--sidebar-width);
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--border-subtle);
             display: flex;
             flex-direction: column;
-            height: 85vh;
+            backdrop-filter: blur(20px);
+            z-index: 10;
+            transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        
+        .sidebar.collapsed {
+            width: 72px;
         }
 
-        /* Top Bar */
-        .titlebar {
-            background-color: var(--surface-color);
-            border-bottom: 1px solid var(--border-color);
-            padding: 12px 16px;
+        .sidebar-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-subtle);
             display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: space-between;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            overflow: hidden;
+            width: 145px;
+            transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar.collapsed .brand {
+            width: 38px;
+        }
+
+        .brand-logo {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .brand-img {
+            content: url('/assets/logo-dark.svg');
+            height: 40px;
+            width: auto;
+            min-width: 134px; /* Prevents proportional squishing, allowing the container to crop it instead */
+        }
+
+        :root.theme-light .brand-img {
+            content: url('/assets/logo.svg');
+        }
+
+        .sidebar-toggle {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        .sidebar-toggle:hover {
+            color: var(--text-primary);
+            background: var(--bg-surface-hover);
+        }
+
+        .sidebar.collapsed .sidebar-toggle {
+            margin: 0 auto;
+        }
+
+        .nav-links {
+            padding: 16px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .nav-item {
+            padding: 10px 14px;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            letter-spacing: 0.01em;
+        }
+
+        .nav-item svg {
+            color: var(--text-secondary);
+            transition: color 0.2s ease;
+        }
+
+        .nav-item:hover {
+            color: var(--text-primary);
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+        
+        .nav-item:hover svg {
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            color: #ffffff;
+            background-color: #1f1f1f;
+            font-weight: 600;
+        }
+
+        .nav-item.active svg {
+            color: #ffffff;
+        }
+        
+        .nav-text {
+            white-space: nowrap;
+            transition: opacity 0.2s;
+        }
+        
+        .sidebar.collapsed .nav-text {
+            opacity: 0;
+            pointer-events: none;
+            width: 0;
+        }
+        
+        .sidebar.collapsed .nav-item {
+            justify-content: center;
+            padding: 10px;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.online { background: rgba(16, 185, 129, 0.1); color: var(--log-success); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .status-badge.error { background: rgba(239, 68, 68, 0.1); color: var(--log-error); border: 1px solid rgba(239, 68, 68, 0.2); }
+
+        .theme-toggle-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.2s;
+        }
+        
+        .theme-toggle-btn:hover {
+            color: var(--text-primary);
+        }
+        /* --- Main Content Area --- */
+        .main-content {
+            flex: 1;
             position: relative;
-        }
-
-        .dots {
             display: flex;
-            gap: 8px;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        .dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-        }
-
-        .dot.red { background-color: #ff5f56; }
-        .dot.yellow { background-color: #ffbd2e; }
-        .dot.green { background-color: #27c93f; }
-
-        .tabs {
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
+        /* Topbar / Breadcrumbs */
+        .topbar {
+            height: 60px;
+            border-bottom: 1px solid var(--border-subtle);
             display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 32px;
+            background: var(--bg-blur);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        .topbar-utilities {
+            display: flex;
+            align-items: center;
             gap: 16px;
         }
 
-        .tab {
-            color: var(--text-muted);
-            font-size: 13px;
+        .breadcrumbs {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        
+        .breadcrumbs span {
+            color: var(--text-primary);
             font-weight: 500;
-            cursor: pointer;
-            padding: 4px 8px;
-            border-radius: 6px;
-            transition: all 0.2s ease;
         }
 
-        .tab:hover {
-            color: var(--text-main);
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-
-        .tab.active {
-            color: var(--text-main);
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-
-        /* Content Area */
-        .content {
+        .view-container {
             flex: 1;
-            overflow: hidden;
             position: relative;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 40px;
         }
 
         .view {
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            top: 40px;
+            left: 40px;
+            right: 40px;
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.2s ease;
-            overflow-y: auto;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            transform: translateY(10px);
         }
 
         .view.active {
             opacity: 1;
             pointer-events: auto;
+            transform: translateY(0);
+            position: relative;
+            top: 0;
+            left: 0;
+            right: 0;
         }
 
-        /* Logs View (Claude Code Aesthetic) */
-        #logs-view {
-            background-color: var(--bg-color);
-            padding: 16px;
-            font-family: var(--font-mono);
-            font-size: 13px;
-            line-height: 1.6;
-        }
-
-        .log-line {
-            margin-bottom: 4px;
-            word-wrap: break-word;
-        }
-
-        .log-time {
-            color: #666;
-            margin-right: 12px;
-        }
-
-        .log-level {
-            margin-right: 12px;
-        }
-
-        .log-level.info { color: var(--log-info); }
-        .log-level.error { color: var(--log-error); font-weight: bold; }
-        .log-level.warning { color: var(--log-warn); }
-
-        .log-msg {
-            color: #d4d4d4;
-        }
-
-        /* Usage View (Vercel Aesthetic) */
-        #usage-view {
-            padding: 32px;
-        }
-
+        /* --- Bento Grid System --- */
         .header {
             margin-bottom: 32px;
         }
@@ -195,183 +319,683 @@
             font-size: 24px;
             font-weight: 600;
             margin-bottom: 8px;
-            letter-spacing: -0.02em;
+            letter-spacing: -0.03em;
         }
 
         .header p {
-            color: var(--text-muted);
+            color: var(--text-secondary);
             font-size: 14px;
         }
 
-        .grid {
+        .bento-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 24px;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 16px;
             margin-bottom: 32px;
         }
 
-        .card {
-            background-color: var(--surface-color);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
+        .bento-card {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-strong);
+            border-radius: 12px;
             padding: 24px;
+            transition: border-color 0.2s ease;
         }
 
-        .card h3 {
-            color: var(--text-muted);
-            font-size: 13px;
+        .bento-card:hover {
+            border-color: var(--text-tertiary);
+        }
+
+        .col-4 { grid-column: span 4; }
+        .col-6 { grid-column: span 6; }
+        .col-8 { grid-column: span 8; }
+        .col-12 { grid-column: span 12; }
+
+        @media (max-width: 1100px) {
+            .col-4 { grid-column: span 6; }
+        }
+        @media (max-width: 800px) {
+            .col-4, .col-6, .col-8 { grid-column: span 12; }
+        }
+
+        .bento-card h3 {
+            color: var(--text-secondary);
+            font-size: 12px;
             font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             margin-bottom: 12px;
         }
 
-        .card .value {
+        .bento-card .metric {
             font-size: 32px;
             font-weight: 600;
-            letter-spacing: -0.02em;
+            letter-spacing: -0.03em;
+            color: var(--text-primary);
+        }
+        
+        .bento-card .metric.mono {
+            font-family: var(--font-mono);
+            font-size: 28px;
+        }
+
+        .bento-card .sub-metric {
+            font-size: 13px;
+            color: var(--text-tertiary);
+            margin-top: 4px;
             font-family: var(--font-mono);
         }
 
-        .model-breakdown {
-            background-color: var(--surface-color);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        .model-breakdown table {
+        /* --- Tables --- */
+        table {
             width: 100%;
             border-collapse: collapse;
         }
 
-        .model-breakdown th, .model-breakdown td {
+        th {
             text-align: left;
-            padding: 16px 24px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .model-breakdown th {
-            color: var(--text-muted);
+            padding: 12px 16px;
+            color: var(--text-secondary);
             font-size: 12px;
             font-weight: 500;
+            border-bottom: 1px solid var(--border-strong);
+        }
+
+        td {
+            padding: 16px;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+        }
+
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background-color: var(--bg-surface-hover); }
+
+        .font-mono { font-family: var(--font-mono); }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            background-color: rgba(255, 255, 255, 0.02);
+            background-color: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-subtle);
         }
 
-        .model-breakdown td {
-            font-size: 14px;
+        /* --- Terminal Logs & Trace Viewer --- */
+        .logs-container {
             font-family: var(--font-mono);
+            font-size: 13px;
+            line-height: 1.6;
+            background: transparent;
+            height: calc(100vh - 200px);
+            overflow-y: auto;
+            scroll-behavior: smooth;
         }
 
-        .model-breakdown tr:last-child td {
-            border-bottom: none;
+        .log-row {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-subtle);
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+        .log-row:hover { background-color: var(--bg-surface-hover); }
+        .log-row.active { background-color: var(--bg-surface-hover); }
+        .log-row.has-trace { border-left: 2px solid var(--accent); }
+        
+        /* App Log */
+        .app-log { color: var(--text-tertiary); }
+        .log-time { color: var(--text-tertiary); margin-right: 16px; font-size: 12px; }
+        .log-level { margin-right: 12px; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+        .log-level.info { color: var(--log-info); }
+        .log-level.error { color: var(--log-error); }
+
+        /* HTTP Log */
+        .http-method {
+            display: inline-block;
+            width: 48px;
+            text-align: center;
+            padding: 2px 0;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            margin-right: 16px;
+        }
+        .method-get { color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
+        .method-post { color: #10b981; background: rgba(16, 185, 129, 0.1); }
+        .method-options { color: #8b5cf6; background: rgba(139, 92, 246, 0.1); }
+
+        .http-path { flex: 1; color: var(--text-primary); font-weight: 500; }
+        
+        .http-status {
+            font-size: 12px;
+            font-weight: 600;
+            margin-right: 16px;
+        }
+        .status-2xx { color: var(--log-success); }
+        .status-3xx { color: #3b82f6; }
+        .status-4xx { color: var(--log-warn); }
+        .status-5xx { color: var(--log-error); }
+
+        .http-latency { color: var(--text-secondary); font-size: 12px; text-align: right; min-width: 60px; }
+
+        /* Slide-out Panel */
+        .slide-panel {
+            position: fixed;
+            top: 0;
+            right: -800px;
+            width: 800px;
+            height: 100vh;
+            background-color: var(--bg-base);
+            border-left: 1px solid var(--border-strong);
+            box-shadow: -10px 0 40px rgba(0,0,0,0.8);
+            transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+        .slide-panel.open { right: 0; }
+
+        .panel-header {
+            padding: 24px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            background-color: var(--bg-surface);
+        }
+        .panel-header h3 { font-size: 18px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 12px; }
+        .panel-header .sub { font-family: var(--font-mono); font-size: 13px; color: var(--text-secondary); }
+
+        .close-btn { background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer; }
+        .close-btn:hover { color: var(--text-primary); }
+
+        .panel-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border-subtle);
+            background-color: var(--bg-surface);
+            padding: 0 24px;
+        }
+        .panel-tab {
+            padding: 12px 16px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .panel-tab:hover { color: var(--text-primary); }
+        .panel-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+
+        .panel-content { padding: 24px; overflow-y: auto; flex: 1; }
+        .panel-pane { display: none; }
+        .panel-pane.active { display: block; }
+
+        .json-block {
+            background-color: var(--bg-code);
+            border: 1px solid var(--border-subtle);
+            padding: 16px;
+            border-radius: 8px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin-bottom: 24px;
+            overflow-x: auto;
+        }
+        
+        .panel-metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+        .panel-metric { background: var(--bg-code); border: 1px solid var(--border-subtle); padding: 12px; border-radius: 6px; }
+        .panel-metric label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; }
+        .panel-metric div { font-size: 16px; font-weight: 600; font-family: var(--font-mono); margin-top: 4px; }
+        
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
         }
     </style>
 </head>
 <body>
-    <div id="disconnected-banner">
-        <span>🔴</span> Proxy Disconnected - Reconnecting...
-    </div>
 
-    <div class="window">
-        <!-- Top Bar -->
-        <div class="titlebar">
-            <div class="dots">
-                <div class="dot red"></div>
-                <div class="dot yellow"></div>
-                <div class="dot green"></div>
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <img class="brand-img" alt="Codex Auth">
             </div>
-            <div class="tabs">
-                <div class="tab active" onclick="switchTab('logs')">Terminal Logs</div>
-                <div class="tab" onclick="switchTab('usage')">AI Usage</div>
+            <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle Sidebar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                    <line x1="9" x2="9" y1="3" y2="21"/>
+                </svg>
+            </button>
+        </div>
+        <div class="nav-links">
+            <div class="nav-item active" onclick="switchTab('logs', 'Network Inspector')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                <span class="nav-text">Terminal</span>
+            </div>
+            <div class="nav-item" onclick="switchTab('usage', 'Usage Analytics')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                <span class="nav-text">Metrics</span>
+            </div>
+            <div class="nav-item" onclick="switchTab('models', 'Available Models')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                <span class="nav-text">Models</span>
+            </div>
+            <div class="nav-item" onclick="switchTab('account', 'Account Settings')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span class="nav-text">Account</span>
             </div>
         </div>
+    </aside>
 
-        <!-- Content Area -->
-        <div class="content">
-            <!-- Logs View -->
+    <!-- Main Content -->
+    <main class="main-content">
+        <header class="topbar">
+            <div class="breadcrumbs">
+                Codex / <span id="breadcrumb-current">Network Inspector</span>
+            </div>
+            <div class="topbar-utilities">
+                <div id="proxy-status" class="status-badge online">
+                    ● <span>Connected</span>
+                </div>
+                <button class="theme-toggle-btn" onclick="toggleTheme(event)" title="Toggle Theme">
+                    <svg id="theme-icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                    <svg id="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="view-container">
+            
+            <!-- Terminal Logs View -->
             <div id="logs-view" class="view active">
-                <!-- Logs injected via JS -->
+                <div class="header" style="display: flex; justify-content: space-between; align-items: flex-end;">
+                    <div>
+                        <h1>Network Inspector</h1>
+                        <p>Live HTTP traffic and interactive request traces.</p>
+                    </div>
+                    <div class="toggle-container">
+                        <input type="checkbox" id="auto-scroll" checked>
+                        <label for="auto-scroll">Auto-scroll to newest</label>
+                    </div>
+                </div>
+                <div class="bento-grid">
+                    <div class="bento-card col-12" style="padding: 0; overflow: hidden;">
+                        <div id="logs-container" class="logs-container">
+                            <!-- Logs injected here -->
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <!-- Usage View -->
+            <!-- Metrics / Usage View -->
             <div id="usage-view" class="view">
                 <div class="header">
-                    <h1>Usage Analytics</h1>
-                    <p>Track your AI token consumption across the proxy.</p>
+                    <h1>Telemetry & Cost</h1>
+                    <p>Track API performance, token velocity, and estimated savings.</p>
                 </div>
                 
-                <div class="grid">
-                    <div class="card">
-                        <h3>Total Cost Saved</h3>
-                        <div class="value" id="total-cost">$0.00</div>
+                <div class="bento-grid">
+                    <div class="bento-card col-4">
+                        <h3>Saved Value</h3>
+                        <div class="metric" id="total-cost">$0.00</div>
+                        <div class="sub-metric">Estimated vs OpenAI API</div>
                     </div>
-                    <div class="card">
-                        <h3>Total Prompt Tokens</h3>
-                        <div class="value" id="total-prompt">0</div>
+                    <div class="bento-card col-4">
+                        <h3>Total Input Tokens</h3>
+                        <div class="metric mono" id="total-prompt">0</div>
                     </div>
-                    <div class="card">
-                        <h3>Total Comp. Tokens</h3>
-                        <div class="value" id="total-completion">0</div>
+                    <div class="bento-card col-4">
+                        <h3>Total Output Tokens</h3>
+                        <div class="metric mono" id="total-completion">0</div>
+                    </div>
+                    
+                    <div class="bento-card col-12">
+                        <h3>Model Performance Breakdown</h3>
+                        <table style="margin-top: 16px;">
+                            <thead>
+                                <tr>
+                                    <th>Model</th>
+                                    <th>Avg TTFT (ms)</th>
+                                    <th>Token Velocity (t/s)</th>
+                                    <th>Prompt Tokens</th>
+                                    <th>Completion Tokens</th>
+                                    <th>Cost Saved</th>
+                                </tr>
+                            </thead>
+                            <tbody id="model-table-body">
+                                <!-- JS Injected -->
+                            </tbody>
+                        </table>
                     </div>
                 </div>
+            </div>
 
+            <!-- Models View -->
+            <div id="models-view" class="view">
                 <div class="header">
-                    <h2 style="font-size: 18px; font-weight: 500; margin-bottom: 16px;">Model Breakdown</h2>
+                    <h1>Routing Configuration</h1>
+                    <p>Dynamically detected models from your active authenticated session.</p>
                 </div>
-                <div class="model-breakdown">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Model</th>
-                                <th>Prompt Tokens</th>
-                                <th>Completion Tokens</th>
-                                <th>Estimated Value</th>
-                            </tr>
-                        </thead>
-                        <tbody id="model-table-body">
-                            <!-- Rows injected via JS -->
-                        </tbody>
-                    </table>
+                <div class="bento-grid">
+                    <div class="bento-card col-12">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Provider</th>
+                                    <th>Model ID</th>
+                                    <th>Routing Tier</th>
+                                    <th>Context Window</th>
+                                    <th>Capabilities</th>
+                                </tr>
+                            </thead>
+                            <tbody id="models-list-body">
+                                <!-- JS Injected -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+            </div>
+
+            <!-- Account View -->
+            <div id="account-view" class="view">
+                <div class="header">
+                    <h1>Security Center</h1>
+                    <p>Manage your active authentication session and local credentials.</p>
+                </div>
+                
+                <div class="bento-grid">
+                    <div class="bento-card col-12">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
+                            <div>
+                                <h3 style="margin: 0 0 6px 0;">Active Session</h3>
+                                <p style="color: var(--text-secondary); margin: 0; font-size: 14px;">Your current proxy authentication status.</p>
+                            </div>
+                            <div id="auth-status" class="status-badge" style="border: 1px solid var(--border-strong);">Fetching...</div>
+                        </div>
+                        
+                        <div style="background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Credentials Path</span>
+                                <button class="theme-toggle-btn" style="padding: 4px 8px; gap: 6px; border-radius: 6px; font-size: 12px;" onclick="copyToClipboard('auth-path', this)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                    Copy
+                                </button>
+                            </div>
+                            <div id="auth-path" class="font-mono" style="color: var(--text-primary); font-size: 13px; word-break: break-all;">Loading...</div>
+                        </div>
+                    </div>
+                    
+                    <div class="bento-card col-12">
+                        <h3 style="margin-top: 0; margin-bottom: 6px;">CLI Tools</h3>
+                        <p style="color: var(--text-secondary); font-size: 14px; margin: 0 0 16px 0;">To refresh your session or switch accounts, run this command in your terminal:</p>
+                        <div style="display: flex; background: var(--bg-code); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;">
+                            <div class="font-mono" id="cli-cmd" style="padding: 16px; flex: 1; color: var(--text-primary); font-size: 13px;">$ codex-auth auth</div>
+                            <button onclick="copyToClipboard('cli-cmd', this, true)" style="background: var(--bg-surface-hover); border: none; border-left: 1px solid var(--border-subtle); color: var(--text-primary); padding: 0 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Trace Slide-out Panel -->
+    <div id="trace-panel" class="slide-panel">
+        <div class="panel-header">
+            <div>
+                <h3>
+                    <span id="trace-header-method" class="http-method">POST</span>
+                    <span id="trace-header-status" class="http-status">200</span>
+                </h3>
+                <div class="sub" id="trace-header-path">/v1/chat/completions</div>
+            </div>
+            <button class="close-btn" onclick="closeTracePanel()">&times;</button>
+        </div>
+        
+        <div class="panel-tabs">
+            <div class="panel-tab active" onclick="switchTraceTab('tab-overview')">Overview</div>
+            <div class="panel-tab" onclick="switchTraceTab('tab-payload')">Payload</div>
+            <div class="panel-tab" onclick="switchTraceTab('tab-response')">Response</div>
+        </div>
+
+        <div class="panel-content">
+            <div id="tab-overview" class="panel-pane active">
+                <div class="panel-metric-grid">
+                    <div class="panel-metric">
+                        <label>Routed Model</label>
+                        <div id="trace-model">-</div>
+                    </div>
+                    <div class="panel-metric">
+                        <label>TTFT</label>
+                        <div id="trace-ttft">-</div>
+                    </div>
+                    <div class="panel-metric">
+                        <label>Generation</label>
+                        <div id="trace-gen">-</div>
+                    </div>
+                    <div class="panel-metric">
+                        <label>Latency</label>
+                        <div id="trace-latency">-</div>
+                    </div>
+                </div>
+                <h4 style="font-size: 12px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 8px;">Log Message</h4>
+                <div class="json-block" id="trace-message"></div>
+            </div>
+            
+            <div id="tab-payload" class="panel-pane">
+                <div class="json-block" id="trace-messages"></div>
+            </div>
+            
+            <div id="tab-response" class="panel-pane">
+                <div class="json-block" id="trace-response"></div>
             </div>
         </div>
     </div>
 
     <script>
-        // Tab Switching
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-            
-            event.target.classList.add('active');
-            document.getElementById(tabId + '-view').classList.add('active');
+        // Theme Toggle Logic
+        const root = document.documentElement;
+        const savedTheme = localStorage.getItem('theme');
+        
+        function setTheme(isLight) {
+            if (isLight) {
+                root.classList.add('theme-light');
+                document.getElementById('theme-icon-moon').style.display = 'none';
+                document.getElementById('theme-icon-sun').style.display = 'block';
+                localStorage.setItem('theme', 'light');
+            } else {
+                root.classList.remove('theme-light');
+                document.getElementById('theme-icon-moon').style.display = 'block';
+                document.getElementById('theme-icon-sun').style.display = 'none';
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+        
+        if (savedTheme === 'light') {
+            setTheme(true);
         }
 
-        // Live Logs Polling
-        const logsContainer = document.getElementById('logs-view');
-        let lastLogCount = 0;
+        function toggleTheme(event) {
+            const isLight = !root.classList.contains('theme-light');
+            
+            // Fallback for browsers that don't support View Transitions API
+            if (!document.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                setTheme(isLight);
+                return;
+            }
 
+            // Calculate max radius for the circular reveal
+            const x = event.clientX;
+            const y = event.clientY;
+            const endRadius = Math.hypot(
+                Math.max(x, window.innerWidth - x),
+                Math.max(y, window.innerHeight - y)
+            );
+
+            // Start the transition
+            const transition = document.startViewTransition(() => {
+                setTheme(isLight);
+            });
+
+            // Animate the clip-path
+            transition.ready.then(() => {
+                document.documentElement.animate(
+                    {
+                        clipPath: [
+                            `circle(0px at ${x}px ${y}px)`,
+                            `circle(${endRadius}px at ${x}px ${y}px)`
+                        ]
+                    },
+                    {
+                        duration: 500,
+                        easing: 'ease-in-out',
+                        pseudoElement: '::view-transition-new(root)'
+                    }
+                );
+            });
+        }
+
+        // Sidebar Toggle
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('collapsed');
+        }
+
+        // UI Navigation
+        function switchTab(tabId, title) {
+            document.querySelectorAll('.nav-item').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            
+            event.currentTarget.classList.add('active');
+            document.getElementById(tabId + '-view').classList.add('active');
+            document.getElementById('breadcrumb-current').textContent = title;
+            closeTracePanel();
+        }
+
+        // Trace Panel Logic
+        let traceDataMap = new Map();
+
+        function switchTraceTab(tabId) {
+            document.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel-pane').forEach(p => p.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+
+        function openTracePanel(index) {
+            document.querySelectorAll('.log-row.active').forEach(r => r.classList.remove('active'));
+            const activeRow = document.querySelector(`.log-row[data-index="${index}"]`);
+            if (activeRow) activeRow.classList.add('active');
+
+            const log = traceDataMap.get(index);
+            if (!log) return;
+            
+            const trace = log.trace_data || {};
+            
+            const method = trace.method || log.method || 'INFO';
+            const mClass = method.toLowerCase();
+            document.getElementById('trace-header-method').className = `http-method method-${mClass}`;
+            document.getElementById('trace-header-method').textContent = method;
+            
+            const status = trace.status || log.status || '-';
+            const statusClass = status.toString().startsWith('2') ? 'status-2xx' : 
+                                status.toString().startsWith('4') || status.toString().startsWith('5') ? 'status-5xx' : 'status-3xx';
+            document.getElementById('trace-header-status').className = `http-status ${statusClass}`;
+            document.getElementById('trace-header-status').textContent = status;
+            
+            document.getElementById('trace-header-path').textContent = trace.path || log.path || 'Application Log';
+            document.getElementById('trace-latency').textContent = log.latency_ms ? log.latency_ms + 'ms' : '-';
+            
+            document.getElementById('trace-model').textContent = trace.model || '-';
+            document.getElementById('trace-ttft').textContent = trace.ttft_ms ? trace.ttft_ms + ' ms' : '-';
+            document.getElementById('trace-gen').textContent = trace.generation_s ? trace.generation_s + ' s' : '-';
+            document.getElementById('trace-message').textContent = log.message;
+            
+            document.getElementById('trace-messages').textContent = trace.messages ? JSON.stringify(trace.messages, null, 2) : 'No payload captured.';
+            document.getElementById('trace-response').textContent = trace.response || 'No response captured.';
+            
+            document.getElementById('trace-panel').classList.add('open');
+        }
+
+        function closeTracePanel() {
+            document.getElementById('trace-panel').classList.remove('open');
+        }
+
+        // Backend Polling & Connection Status
         let isDisconnected = false;
-
         function setDisconnected(status) {
             if (isDisconnected !== status) {
                 isDisconnected = status;
-                document.getElementById('disconnected-banner').style.display = status ? 'flex' : 'none';
+                const proxyStatus = document.getElementById('proxy-status');
                 if (status) {
-                    console.error("Connection to proxy lost.");
+                    proxyStatus.className = 'status-badge error';
+                    proxyStatus.innerHTML = '● <span>Disconnected</span>';
                 } else {
-                    console.log("Connection to proxy restored.");
+                    proxyStatus.className = 'status-badge online';
+                    proxyStatus.innerHTML = '● <span>Connected</span>';
                 }
             }
+        }
+
+        // Logs
+        const logsContainer = document.getElementById('logs-container');
+        const autoScrollToggle = document.getElementById('auto-scroll');
+        let lastLogCount = 0;
+        let logIndexCounter = 0;
+
+        function renderLog(log) {
+            const div = document.createElement('div');
+            const hasTrace = !!log.trace_data;
+            div.className = 'log-row ' + (hasTrace ? 'has-trace' : '');
+            
+            if (log.is_http) {
+                const mClass = (log.method || '').toLowerCase();
+                const statusStr = (log.status || '').toString();
+                const statusClass = statusStr.startsWith('2') ? 'status-2xx' : statusStr.startsWith('4') || statusStr.startsWith('5') ? 'status-5xx' : 'status-3xx';
+                
+                div.innerHTML = `
+                    <span class="log-time">${log.time}</span>
+                    <span class="http-method method-${mClass}">${log.method}</span>
+                    <span class="http-path">${log.path}</span>
+                    <span class="http-status ${statusClass}">${log.status}</span>
+                    <span class="http-latency">${log.latency_ms}ms</span>
+                `;
+            } else {
+                const lvlClass = log.level.toLowerCase();
+                div.innerHTML = `
+                    <span class="log-time">${log.time}</span>
+                    <span class="log-level ${lvlClass}">${log.level}</span>
+                    <span class="app-log">${log.message}</span>
+                `;
+            }
+
+            if (hasTrace || log.is_http) {
+                const idx = logIndexCounter++;
+                traceDataMap.set(idx, log);
+                div.dataset.index = idx;
+                div.onclick = () => openTracePanel(idx);
+            }
+            return div;
         }
 
         async function fetchLogs() {
             try {
                 const res = await fetch('/api/logs');
-                if (!res.ok) throw new Error("Server returned " + res.status);
+                if (!res.ok) throw new Error();
                 setDisconnected(false);
                 const data = await res.json();
                 const logs = data.logs || [];
@@ -379,76 +1003,127 @@
                 if (logs.length > lastLogCount) {
                     const newLogs = logs.slice(lastLogCount);
                     newLogs.forEach(log => {
-                        const div = document.createElement('div');
-                        div.className = 'log-line';
-                        
-                        const lvlClass = log.level.toLowerCase();
-                        let lvlDisplay = '●';
-                        
-                        div.innerHTML = `
-                            <span class="log-time">${log.time}</span>
-                            <span class="log-level ${lvlClass}">${lvlDisplay}</span>
-                            <span class="log-msg">${log.message}</span>
-                        `;
-                        logsContainer.appendChild(div);
+                        logsContainer.appendChild(renderLog(log));
                     });
                     lastLogCount = logs.length;
                     
-                    // Auto scroll to bottom
-                    logsContainer.scrollTop = logsContainer.scrollHeight;
+                    if (autoScrollToggle.checked) {
+                        logsContainer.scrollTop = logsContainer.scrollHeight;
+                    }
                 }
             } catch (e) {
                 setDisconnected(true);
             }
         }
 
-        // Usage Polling
+        // Usage Metrics
         async function fetchUsage() {
             try {
                 const res = await fetch('/api/usage');
-                if (!res.ok) throw new Error("Server returned " + res.status);
+                if (!res.ok) return;
                 const usage = await res.json();
                 
                 const models = usage.models || {};
-                let totalCost = 0;
-                let totalPrompt = 0;
-                let totalCompletion = 0;
-                
                 const tbody = document.getElementById('model-table-body');
                 tbody.innerHTML = '';
                 
                 for (const [model, stats] of Object.entries(models)) {
-                    totalPrompt += stats.prompt_tokens;
-                    totalCompletion += stats.completion_tokens;
-                    totalCost += stats.estimated_cost;
-                    
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
-                        <td style="color: #fff;">${model}</td>
-                        <td>${stats.prompt_tokens.toLocaleString()}</td>
-                        <td>${stats.completion_tokens.toLocaleString()}</td>
-                        <td style="color: #27c93f;">$${stats.estimated_cost.toFixed(4)}</td>
+                        <td class="font-mono">${model}</td>
+                        <td class="font-mono" style="color:var(--accent)">${stats.avg_ttft_ms ? stats.avg_ttft_ms.toFixed(0) : '-'}</td>
+                        <td class="font-mono">${stats.tokens_per_sec ? stats.tokens_per_sec.toFixed(1) : '-'}</td>
+                        <td class="font-mono">${stats.prompt_tokens.toLocaleString()}</td>
+                        <td class="font-mono">${stats.completion_tokens.toLocaleString()}</td>
+                        <td style="color: var(--log-success);">$${stats.estimated_cost.toFixed(4)}</td>
                     `;
                     tbody.appendChild(tr);
                 }
                 
-                document.getElementById('total-cost').textContent = `$${totalCost.toFixed(2)}`;
-                document.getElementById('total-prompt').textContent = totalPrompt.toLocaleString();
-                document.getElementById('total-completion').textContent = totalCompletion.toLocaleString();
+                document.getElementById('total-cost').textContent = `$${(usage.total_savings_usd || 0).toFixed(2)}`;
+                document.getElementById('total-prompt').textContent = (usage.total_input_tokens || 0).toLocaleString();
+                document.getElementById('total-completion').textContent = (usage.total_output_tokens || 0).toLocaleString();
+            } catch (e) {}
+        }
+
+        // Models List
+        async function fetchModels() {
+            try {
+                const res = await fetch('/api/models_list');
+                if (!res.ok) return;
+                const data = await res.json();
+                const tbody = document.getElementById('models-list-body');
+                tbody.innerHTML = '';
                 
-            } catch (e) {
-                console.error("Failed to fetch usage:", e);
-            }
+                data.models.forEach(m => {
+                    let badges = '';
+                    if (m.vision) badges += '<span class="badge" style="color: #60a5fa; border-color: rgba(59,130,246,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg> Vision</span>';
+                    if (m.tools) badges += '<span class="badge" style="color: #c084fc; border-color: rgba(192,132,252,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14.7 13.5-3.4-3.4"/><path d="M12 6a4 4 0 1 1-5.7 5.7l-5 5a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l5-5A4 4 0 1 1 12 6Z"/></svg> Tools</span>';
+                    if (m.search) badges += '<span class="badge" style="color: #34d399; border-color: rgba(52,211,153,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg> Web</span>';
+                    if (m.data) badges += '<span class="badge" style="color: #fbbf24; border-color: rgba(251,191,36,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg> Code</span>';
+                    
+                    if (!badges) badges = '<span class="badge" style="color: var(--text-secondary); border-color: var(--border-strong); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Text</span>';
+                    
+                    const provider = m.id.startsWith('claude') ? 'Anthropic' : 
+                                     m.id.startsWith('gemini') ? 'Google' : 
+                                     m.id.startsWith('llama') ? 'Meta' : 'OpenAI';
+                    
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td class="font-mono" style="color: var(--text-secondary)">${provider}</td>
+                        <td class="font-mono" style="font-weight: 500">${m.id}</td>
+                        <td style="color: var(--log-info); font-size: 13px;">${m.tier}</td>
+                        <td class="font-mono">${m.context_length.toLocaleString()}</td>
+                        <td><div style="display: flex; gap: 6px; flex-wrap: wrap;">${badges}</div></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {}
+        }
+
+        // Status
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                const authStatus = document.getElementById('auth-status');
+                
+                if (data.is_authenticated) {
+                    authStatus.className = 'status-badge online';
+                    authStatus.innerHTML = '● Validated';
+                    document.getElementById('auth-path').textContent = data.auth_file_path;
+                } else {
+                    authStatus.className = 'status-badge error';
+                    authStatus.innerHTML = '● Missing Auth';
+                }
+            } catch (e) {}
         }
 
         // Init
-        fetchUsage();
         fetchLogs();
+        fetchUsage();
+        fetchModels();
+        fetchStatus();
         
-        // Poll logs every 1 second
         setInterval(fetchLogs, 1000);
-        // Poll usage every 5 seconds
-        setInterval(fetchUsage, 5000);
+        setInterval(fetchUsage, 3000);
+        setInterval(fetchModels, 30000);
+        setInterval(fetchStatus, 10000);
+
+        function copyToClipboard(elementId, btnElement, stripDollar = false) {
+            let text = document.getElementById(elementId).innerText;
+            if (stripDollar && text.startsWith('$ ')) {
+                text = text.substring(2);
+            }
+            navigator.clipboard.writeText(text).then(() => {
+                const originalHTML = btnElement.innerHTML;
+                btnElement.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--log-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied`;
+                setTimeout(() => {
+                    btnElement.innerHTML = originalHTML;
+                }, 2000);
+            });
+        }
     </script>
 </body>
 </html>

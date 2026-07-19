@@ -6,14 +6,26 @@ from typing import Dict, Any
 
 _usage_lock = threading.Lock()
 
-# Map model slug to (input_price_per_1M, output_price_per_1M)
+# Map model slug to (input_price_per_1M, output_price_per_1M) — OpenAI public pricing
 PRICING = {
-    "gpt-5-5": (5.00, 30.00),
-    "gpt-5-3": (5.00, 30.00),
-    "gpt-5-5-mini": (0.15, 0.60),
-    "gpt-5-3-mini": (0.15, 0.60),
-    "gpt-5-mini": (0.15, 0.60),
-    "auto": (2.50, 10.00), # Fallback estimate
+    # GPT-4o family
+    "gpt-4o":               (2.50,  10.00),
+    "gpt-4o-vision":        (2.50,  10.00),
+    "gpt-4o-mini":          (0.15,   0.60),
+    "gpt-4o-mini-vision":   (0.15,   0.60),
+    # GPT-4 Turbo
+    "gpt-4-turbo":          (10.00, 30.00),
+    "gpt-4-turbo-vision":   (10.00, 30.00),
+    # GPT-5 family (estimates — not publicly priced yet)
+    "gpt-5-5":              (5.00,  30.00),
+    "gpt-5-3":              (5.00,  30.00),
+    "gpt-5-5-mini":         (0.15,   0.60),
+    "gpt-5-3-mini":         (0.15,   0.60),
+    "gpt-5-mini":           (0.15,   0.60),
+    "gpt-5-5-vision":       (5.00,  30.00),
+    "gpt-5-3-vision":       (5.00,  30.00),
+    # Auto (weighted estimate)
+    "auto":                 (2.50,  10.00),
 }
 
 # Fallback default pricing if model is not specifically listed above
@@ -52,7 +64,7 @@ def save_usage(data: Dict[str, Any]) -> None:
     with open(usage_file, "w") as f:
         json.dump(data, f, indent=2)
 
-def record_usage(model_slug: str, input_tokens: int, output_tokens: int) -> None:
+def record_usage(model_slug: str, input_tokens: int, output_tokens: int, ttft_s: float = 0.0, generation_time_s: float = 0.0) -> None:
     with _usage_lock:
         data = load_usage()
         
@@ -74,12 +86,17 @@ def record_usage(model_slug: str, input_tokens: int, output_tokens: int) -> None
             data["models"][model_slug] = {
                 "requests": 0,
                 "input_tokens": 0,
-                "output_tokens": 0
+                "output_tokens": 0,
+                "total_ttft_s": 0.0,
+                "total_generation_s": 0.0
             }
             
         data["models"][model_slug]["requests"] += 1
         data["models"][model_slug]["input_tokens"] += input_tokens
         data["models"][model_slug]["output_tokens"] += output_tokens
+        data["models"][model_slug]["total_ttft_s"] = data["models"][model_slug].get("total_ttft_s", 0.0) + ttft_s
+        data["models"][model_slug]["total_generation_s"] = data["models"][model_slug].get("total_generation_s", 0.0) + generation_time_s
+
         
         save_usage(data)
 

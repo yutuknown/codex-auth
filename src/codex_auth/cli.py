@@ -15,6 +15,10 @@ import uvicorn
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
+# If running as a PyInstaller standalone executable, force Playwright to look for the bundled browser
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
 import click
 import typer.rich_utils
 from .api import app as fastapi_app
@@ -77,6 +81,33 @@ def start(
     console.print(f"  [dim]Base URL:[/dim] [cyan]http://{host}:{port}/v1[/cyan]")
     console.print(f"  [dim]API Key:[/dim]  [dim](Any dummy string works)[/dim]\n")
     
+    # Pre-flight port check — give a clean error before uvicorn crashes with WinError 10048
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sock.connect_ex((host, port)) == 0:
+            # Port is occupied — try to find out who's using it
+            pid_hint = ""
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["netstat", "-ano"],
+                    capture_output=True, text=True
+                )
+                for line in result.stdout.splitlines():
+                    if f":{port}" in line and "LISTENING" in line:
+                        pid = line.strip().split()[-1]
+                        pid_hint = f"\n  [dim]PID:[/dim]    {pid} — run [bold]taskkill /F /PID {pid}[/bold] to free the port"
+                        break
+            except Exception:
+                pass
+
+            console.print(f"[bold red]✖[/bold red] [bold]Port {port} Is Already In Use[/bold]")
+            console.print(f"  [dim]Error:[/dim]  Another process is already listening on {host}:{port}.")
+            console.print(f"  [dim]Action:[/dim] Stop the existing proxy with [bold]Ctrl+C[/bold] in its terminal,")
+            console.print(f"          or start on a different port: [bold]codex-auth start --port 8001[/bold]{pid_hint}\n")
+            raise typer.Exit(code=1)
+
     try:
         if reload:
             uvicorn.run("codex_auth.api:app", host=host, port=port, reload=True)
@@ -92,6 +123,26 @@ def auth():
     Authenticate and capture Codex tokens using the automated headless flow.
     """
     login()
+
+@app.command()
+def install():
+    """
+    Install the required headless browser (Chromium) for Codex-Auth.
+    This is required after installing via pipx.
+    """
+    console.print("\n[bold cyan]●[/bold cyan] [bold]Installing Chromium Browser[/bold]")
+    console.print("  [dim]This may take a minute as Playwright downloads the browser engine...[/dim]\n")
+    
+    import subprocess
+    try:
+        # Run playwright install chromium
+        subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+        console.print("\n[bold green]✔[/bold green] [bold]Browser Installed Successfully![/bold]")
+        console.print("  [dim]You can now run [bold]codex-auth auth[/bold] to login.[/dim]\n")
+    except subprocess.CalledProcessError:
+        console.print("\n[bold red]✖[/bold red] [bold]Browser Installation Failed[/bold]")
+        console.print("  [dim]Action:[/dim] Try running `playwright install chromium` manually.\n")
+        raise typer.Exit(code=1)
 
 from rich.columns import Columns
 from rich.align import Align

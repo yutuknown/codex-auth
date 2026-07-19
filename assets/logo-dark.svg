@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="400" height="120">
+  
+  <!-- Terminal Ghost Mascot (Stealth Proxy) -->
+  <g transform="translate(-6, -18) scale(1.3)">
+    <!-- Ghost Silhouette (White for Dark Mode) -->
+    <path d="M 20 90 L 20 60 A 30 30 0 0 1 80 60 L 80 90 A 10 10 0 0 0 60 90 A 10 10 0 0 0 40 90 A 10 10 0 0 0 20 90 Z" fill="#F8FAFC" />
+    
+    <!-- Terminal Eyes (Dark for contrast) -->
+    <path d="M 36 49 L 42 55 L 36 61" fill="none" stroke="#0F172A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+    <line x1="50" y1="61" x2="64" y2="61" stroke="#0F172A" stroke-width="4" stroke-linecap="round" />
+  </g>
+
+  <!-- Typography (White for Dark Mode) -->
+  <text x="115" y="78" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="56" fill="#F8FAFC" letter-spacing="-1.5px">
+    <tspan font-weight="900">codex</tspan><tspan font-weight="300">-auth</tspan>
+  </text>
+  
+</svg>

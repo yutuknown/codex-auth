@@ -22,11 +22,20 @@ class StreamHandler(logging.Handler):
             # Remove rich markup tags for clean HTML rendering
             import re
             msg_clean = re.sub(r'\[/?(?:dim|cyan|red|green|yellow)\]', '', msg)
-            log_stream.append({
+            log_entry = {
                 "time": time.strftime("%H:%M:%S", time.localtime(record.created)),
                 "level": record.levelname,
                 "message": msg_clean
-            })
+            }
+            if hasattr(record, 'trace_data'):
+                log_entry['trace_data'] = record.trace_data
+            if hasattr(record, 'is_http'):
+                log_entry['is_http'] = True
+                log_entry['method'] = getattr(record, 'method', '')
+                log_entry['path'] = getattr(record, 'path', '')
+                log_entry['status'] = getattr(record, 'status', 0)
+                log_entry['latency_ms'] = getattr(record, 'latency_ms', 0)
+            log_stream.append(log_entry)
         except Exception:
             pass
 
@@ -57,7 +66,27 @@ async def app_lifespan(app: FastAPI):
         await provider.initialize(engine)
         yield
 
+from fastapi import Request
+
 app = FastAPI(title="ChatGPT Stealth API", lifespan=app_lifespan)
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    
+    path = request.url.path
+    if not path.startswith(("/dashboard", "/api/logs", "/api/usage", "/api/status", "/api/models_list")):
+        logger.info(f"{request.method} {path} {response.status_code}", extra={
+            "is_http": True,
+            "method": request.method,
+            "path": path,
+            "status": response.status_code,
+            "latency_ms": round(process_time * 1000, 2)
+        })
+    
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -71,7 +100,14 @@ app.add_middleware(
 from .routes_openai import router as openai_router
 from .routes_ollama import router as ollama_router
 from .routes_ui import router as ui_router
+from fastapi.staticfiles import StaticFiles
+import os
 
 app.include_router(openai_router)
 app.include_router(ollama_router)
 app.include_router(ui_router)
+
+# Mount assets directory for images like the logo
+assets_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets")
+if os.path.exists(assets_path):
+    app.mount("/assets", StaticFiles(directory=assets_path), name="assets")

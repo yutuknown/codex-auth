@@ -171,7 +171,7 @@ class OpenAIProvider(BaseProvider):
                 return data.get("models", [])
         except Exception as e:
             logger.error(f"[OpenAI] Failed to fetch real models: {e}")
-        return [{"slug": "auto", "max_tokens": 128000, "tags": ["vision"]}, {"slug": "gpt-4o", "max_tokens": 128000, "tags": ["vision"]}]
+        return [{"slug": "auto", "max_tokens": 128000}, {"slug": "gpt-5-5", "max_tokens": 34834}, {"slug": "gpt-5-3", "max_tokens": 34834}]
 
 # We instantiate a singleton for the router to use
 provider = OpenAIProvider()

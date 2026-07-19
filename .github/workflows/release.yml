@@ -1,0 +1,78 @@
+name: Publish and Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # Needed to upload to GitHub Releases
+  id-token: write # Needed for trusted publishing to PyPI
+
+jobs:
+  pypi-publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build Wheel and sdist
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # PyPI Trusted Publishing uses OIDC, no password required!
+          skip-existing: true
+
+  build-exe:
+    name: Build Standalone Windows .exe
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Download Chromium (Local Package)
+        # We explicitly set PLAYWRIGHT_BROWSERS_PATH=0 so chromium is downloaded
+        # directly into the site-packages/playwright folder instead of %USERPROFILE%.
+        # This is critical for PyInstaller to bundle it properly.
+        run: |
+          $env:PLAYWRIGHT_BROWSERS_PATH="0"
+          playwright install chromium
+        shell: powershell
+
+      - name: Build Executable with PyInstaller
+        # We use --onefile for a single standalone executable.
+        # We dynamically find the playwright path and bundle the local-browsers.
+        run: |
+          $PLAYWRIGHT_PATH = (python -c "import playwright; import os; print(os.path.dirname(playwright.__file__))")
+          pyinstaller --onefile `
+            --name codex-auth `
+            --add-data "${PLAYWRIGHT_PATH}\driver\package\.local-browsers;playwright\driver\package\.local-browsers" `
+            --add-data "src\codex_auth\web\templates;codex_auth\web\templates" `
+            --add-data "src\codex_auth\web\static;codex_auth\web\static" `
+            src/codex_auth/cli.py
+        shell: powershell
+
+      - name: Upload .exe to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/codex-auth.exe

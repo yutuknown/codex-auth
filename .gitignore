@@ -27,8 +27,14 @@ env/
 .env
 
 # Custom ignores
-.codex/
-profiles/
+.codex/*
+!.codex/*.example
+
+profiles/*
+!profiles/openai-phantom-session/
+profiles/openai-phantom-session/*
+!profiles/openai-phantom-session/README.md
+
 sandbox/
 models.json
 models_dump.json

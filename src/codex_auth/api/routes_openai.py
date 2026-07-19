@@ -37,29 +37,12 @@ async def openai_models():
     for m in real_models:
         slug = m.get("slug", "auto")
         max_tokens = m.get("max_tokens", 32768)
-        tags = m.get("tags", [])
-        
-        product_features = m.get("product_features", {})
-        attachments = product_features.get("attachments", {})
-        has_image_support = "image_mime_types" in attachments and len(attachments["image_mime_types"]) > 0
-        
-        capabilities = []
-        is_vision = "vision" in tags or "multimodal" in tags or "gpt4" in tags or has_image_support
-        if is_vision:
-            capabilities.append("vision")
-            if not slug.endswith("-vision"):
-                slug += "-vision"
-            
         models_data.append({
             "id": slug,
             "object": "model",
             "created": int(time.time()),
             "owned_by": "openai",
             "context_length": max_tokens,
-            "architecture": {
-                "modality": "text+image->text" if is_vision else "text->text"
-            },
-            "capabilities": capabilities
         })
     return {
         "object": "list",
@@ -135,8 +118,16 @@ async def openai_chat_completions(req: ChatCompletionRequest):
             full_response = ""
             created_time = int(time.time())
             
+            start_time = time.time()
+            ttft_s = 0.0
+            first_token_received = False
+            
             try:
                 async for chunk in provider.generate_stream(prompt, files=files, web_search=req.web_search):
+                    if not first_token_received:
+                        ttft_s = time.time() - start_time
+                        first_token_received = True
+                        
                     full_response += chunk
                     
                     data = {
@@ -154,6 +145,10 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                     }
                     yield f"data: {json.dumps(data)}\n\n"
                 
+                # Record Usage before sending final chunk so we have the counts
+                generation_s = time.time() - start_time
+                completion_tokens = get_token_count(full_response)
+                
                 # Final finish event
                 final_data = {
                     "id": "chatcmpl-stealth",
@@ -166,15 +161,37 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                             "delta": {},
                             "finish_reason": "stop"
                         }
-                    ]
+                    ],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 0
+                        },
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 0
+                        }
+                    }
                 }
                 yield f"data: {json.dumps(final_data)}\n\n"
                 yield "data: [DONE]\n\n"
                 
                 # Record Usage after stream finishes
-                completion_tokens = get_token_count(full_response)
                 try:
-                    record_usage(requested_model, prompt_tokens, completion_tokens)
+                    record_usage(requested_model, prompt_tokens, completion_tokens, ttft_s, generation_s)
+                    logger.info(f"[API] Stream completed • TTFT: {ttft_s*1000:.0f}ms • {completion_tokens} tok", extra={
+                        "trace_data": {
+                            "method": "POST",
+                            "status": 200,
+                            "path": "/v1/chat/completions",
+                            "model": requested_model,
+                            "messages": [m.model_dump(exclude_none=True) for m in req.messages],
+                            "response": full_response,
+                            "ttft_ms": round(ttft_s * 1000),
+                            "generation_s": round(generation_s, 2)
+                        }
+                    })
                 except Exception as e:
                     logger.error(f"[API] Failed to record usage: {e}")
                     
@@ -196,13 +213,28 @@ async def openai_chat_completions(req: ChatCompletionRequest):
     else:
         # Non-streaming fallback
         full_response = ""
+        start_time = time.time()
         try:
             async for chunk in provider.generate_stream(prompt, files=files, web_search=req.web_search):
                 full_response += chunk
                 
+            generation_s = time.time() - start_time
             completion_tokens = get_token_count(full_response)
             try:
-                record_usage(requested_model, prompt_tokens, completion_tokens)
+                # TTFT is same as full generation time for non-streaming
+                record_usage(requested_model, prompt_tokens, completion_tokens, generation_s, generation_s)
+                logger.info(f"[API] Request completed • {completion_tokens} tok", extra={
+                    "trace_data": {
+                        "method": "POST",
+                        "status": 200,
+                        "path": "/v1/chat/completions",
+                        "model": requested_model,
+                        "messages": [m.model_dump(exclude_none=True) for m in req.messages],
+                        "response": full_response,
+                        "ttft_ms": round(generation_s * 1000),
+                        "generation_s": round(generation_s, 2)
+                    }
+                })
             except Exception as e:
                 logger.error(f"[API] Failed to record usage: {e}")
 
@@ -224,7 +256,13 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                 "usage": {
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens
+                    "total_tokens": prompt_tokens + completion_tokens,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 0
+                    },
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0
+                    }
                 }
             }
         except CaptchaDetectedError as e:

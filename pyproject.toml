@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codex-auth"
+name = "codex-auth-proxy"
 version = "0.2.0"
 description = "A Stealth Playwright proxy providing an OpenAI-compatible API to ChatGPT"
 readme = "README.md"

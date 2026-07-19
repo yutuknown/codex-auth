@@ -42,7 +42,7 @@ Codex-Auth is a Python package that provides an OpenAI-compatible API proxy back
 If you have Python installed, use `pipx` to install Codex-Auth globally in an isolated environment. This prevents dependency conflicts with your other Python packages.
 
 ```bash
-pipx install codex-auth
+pipx install codex-auth-proxy
 codex-auth install
 ```
 

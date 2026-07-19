@@ -16,7 +16,7 @@ This skill provides all the context an agent needs to manage, run, and troublesh
 ## Installation
 For normal users, instruct them to install globally via:
 ```bash
-pipx install codex-auth
+pipx install codex-auth-proxy
 codex-auth install
 ```
 

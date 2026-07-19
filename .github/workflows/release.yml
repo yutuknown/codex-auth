@@ -12,6 +12,7 @@ jobs:
   pypi-publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
+    environment: pypi
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4

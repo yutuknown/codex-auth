@@ -1,8 +1,7 @@
-import sys
-import os
 import json
+import os
+import sys
 import urllib.request
-import re
 
 API_URL = "http://127.0.0.1:8000/v1/chat/completions"
 

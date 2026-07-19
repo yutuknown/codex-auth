@@ -1,29 +1,23 @@
-import json
-import urllib.request
-import urllib.error
-import typer
 import base64
-import os
+import json
 import mimetypes
+import os
+import urllib.error
+import urllib.request
 from pathlib import Path
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.padding import Padding
-from rich.panel import Panel
-from rich.rule import Rule
-from rich import box
-from rich.live import Live
-from rich.console import ConsoleOptions, RenderResult, RenderableType
-from rich.segment import Segment
-from rich.text import Text
-from rich.console import Group
-import shutil
+
+import questionary
+import typer
 from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import HTML, FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
-from prompt_toolkit.formatted_text import HTML, FormattedText
-import questionary
-from .usage import load_usage, format_tokens
+from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.segment import Segment
+
+from .usage import format_tokens, load_usage
 
 console = Console()
 
@@ -145,7 +139,7 @@ def run_chat():
                 messages.clear()
                 messages.append({"role": "system", "content": SYSTEM_PROMPT})
                 attached_files.clear()
-                console.print(f"  [dim]Context cleared. Started a new session.[/dim]\n")
+                console.print("  [dim]Context cleared. Started a new session.[/dim]\n")
                 continue
                 
             if cmd_text.startswith("/color"):
@@ -235,7 +229,7 @@ def run_chat():
                 # Direct sys.stdout.write per token — no Live, no ANSI cursor tricks.
                 # | prefix is re-emitted after every newline to keep the chain intact.
                 import sys
-                pipe = f"\033[36m| \033[0m"  # cyan | prefix
+                pipe = "\033[36m| \033[0m"  # cyan | prefix
                 sys.stdout.write(pipe)
                 sys.stdout.flush()
                 at_line_start = False
@@ -303,6 +297,6 @@ def run_chat():
             console.print("\n\n[bold cyan]✔[/bold cyan] [bold]Session Ended[/bold]\n")
             break
         except Exception as e:
-            console.print(f"\n[bold red]✖[/bold red] [bold]Error[/bold]")
+            console.print("\n[bold red]✖[/bold red] [bold]Error[/bold]")
             console.print(f"  [dim]Details:[/dim] {str(e)}\n")
 

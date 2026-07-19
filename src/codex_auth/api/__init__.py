@@ -1,12 +1,12 @@
-import sys
 import logging
-from collections import deque
-import webbrowser
 import threading
 import time
+import webbrowser
+from collections import deque
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 from rich.logging import RichHandler
 
 from ..core.browser import engine
@@ -97,11 +97,13 @@ app.add_middleware(
 )
 
 # Import and include routers below to avoid circular imports
-from .routes_openai import router as openai_router
-from .routes_ollama import router as ollama_router
-from .routes_ui import router as ui_router
-from fastapi.staticfiles import StaticFiles
 import os
+
+from fastapi.staticfiles import StaticFiles
+
+from .routes_ollama import router as ollama_router
+from .routes_openai import router as openai_router
+from .routes_ui import router as ui_router
 
 app.include_router(openai_router)
 app.include_router(ollama_router)

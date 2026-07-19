@@ -68,7 +68,6 @@ jobs:
             --name codex-auth `
             --add-data "${PLAYWRIGHT_PATH}\driver\package\.local-browsers;playwright\driver\package\.local-browsers" `
             --add-data "src\codex_auth\web\templates;codex_auth\web\templates" `
-            --add-data "src\codex_auth\web\static;codex_auth\web\static" `
             src/codex_auth/cli.py
         shell: powershell
 

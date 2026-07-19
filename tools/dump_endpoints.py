@@ -1,7 +1,9 @@
 import asyncio
 import json
-from playwright.async_api import async_playwright
 from pathlib import Path
+
+from playwright.async_api import async_playwright
+
 
 async def main():
     auth_file = Path(__file__).resolve().parent.parent / ".codex" / "auth.json"
@@ -11,7 +13,10 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            )
         )
         await context.add_cookies([{
             "name": "__Secure-next-auth.session-token",

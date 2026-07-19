@@ -1,5 +1,7 @@
 import time
+
 from fastapi import APIRouter, HTTPException, Request
+
 from ..providers.openai.provider import provider
 
 router = APIRouter()

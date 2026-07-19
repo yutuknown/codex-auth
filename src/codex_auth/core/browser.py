@@ -1,7 +1,7 @@
-import sys
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger("codex_auth")

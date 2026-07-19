@@ -1,15 +1,12 @@
-import typer
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich import print as rprint
+import base64
+import json
 import os
 import sys
-import json
-import base64
-import urllib.request
 from pathlib import Path
+
+import typer
 import uvicorn
+from rich.console import Console
 
 # Force UTF-8 encoding on Windows to support elegant bullet points (●)
 if sys.platform == "win32":
@@ -21,11 +18,11 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
 
 import click
 import typer.rich_utils
-from .api import app as fastapi_app
-from .providers.openai.auth import login
+
 from . import __version__
 from .chat import run_chat
-from .usage import load_usage, format_tokens
+from .providers.openai.auth import login
+from .usage import format_tokens, load_usage
 
 # Enable rich markup mode for beautiful help text formatting
 app = typer.Typer(
@@ -77,9 +74,9 @@ def start(
         console.print("  [dim]Action:[/dim] Run [bold]codex-auth auth[/bold] first before starting the proxy.\n")
         raise typer.Exit(code=1)
 
-    console.print(f"\n[bold green]●[/bold green] [bold]Starting Codex-Auth Proxy[/bold]")
+    console.print("\n[bold green]●[/bold green] [bold]Starting Codex-Auth Proxy[/bold]")
     console.print(f"  [dim]Base URL:[/dim] [cyan]http://{host}:{port}/v1[/cyan]")
-    console.print(f"  [dim]API Key:[/dim]  [dim](Any dummy string works)[/dim]\n")
+    console.print("  [dim]API Key:[/dim]  [dim](Any dummy string works)[/dim]\n")
     
     # Pre-flight port check — give a clean error before uvicorn crashes with WinError 10048
     import socket
@@ -104,7 +101,7 @@ def start(
 
             console.print(f"[bold red]✖[/bold red] [bold]Port {port} Is Already In Use[/bold]")
             console.print(f"  [dim]Error:[/dim]  Another process is already listening on {host}:{port}.")
-            console.print(f"  [dim]Action:[/dim] Stop the existing proxy with [bold]Ctrl+C[/bold] in its terminal,")
+            console.print("  [dim]Action:[/dim] Stop the existing proxy with [bold]Ctrl+C[/bold] in its terminal,")
             console.print(f"          or start on a different port: [bold]codex-auth start --port 8001[/bold]{pid_hint}\n")
             raise typer.Exit(code=1)
 
@@ -144,10 +141,6 @@ def install():
         console.print("  [dim]Action:[/dim] Try running `playwright install chromium` manually.\n")
         raise typer.Exit(code=1)
 
-from rich.columns import Columns
-from rich.align import Align
-from rich.text import Text
-from rich.box import ROUNDED
 
 @app.command()
 def status():

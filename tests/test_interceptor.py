@@ -1,6 +1,7 @@
-import json
 from unittest.mock import Mock
-from codex_auth.interceptor import on_response, captured
+
+from codex_auth.interceptor import captured, on_response
+
 
 def test_on_response_success():
     # Setup mock response

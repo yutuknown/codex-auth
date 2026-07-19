@@ -1,11 +1,11 @@
 import os
-import sys
-import time
-import subprocess
 import re
+import subprocess
+import sys
+
 import typer
 from rich.console import Console
-from rich.panel import Panel
+
 
 def launch_native_browser(url: str):
     if sys.platform == "win32":
@@ -87,7 +87,7 @@ def login():
             process.wait(timeout=180)
         except subprocess.TimeoutExpired:
             process.terminate()
-            console.print(f"\n[bold red]●[/bold red] [bold]Authentication Failed[/bold]")
+            console.print("\n[bold red]●[/bold red] [bold]Authentication Failed[/bold]")
             console.print("  [dim]Error:[/dim]  Login timed out after 3 minutes.\n")
             sys.exit(1)
         
@@ -96,7 +96,7 @@ def login():
             console.print("  [dim]Status:[/dim]  Tokens generated natively")
             console.print("  [dim]Next:[/dim]    You can now start the proxy via [bold]codex-auth start[/bold]\n")
         else:
-            console.print(f"\n[bold red]●[/bold red] [bold]Authentication Failed[/bold]")
+            console.print("\n[bold red]●[/bold red] [bold]Authentication Failed[/bold]")
             console.print(f"  [dim]Error:[/dim]  Codex login exited with code {process.returncode}\n")
             sys.exit(1)
 
@@ -106,7 +106,7 @@ def login():
         console.print("  [dim]Action:[/dim] Ensure the official codex CLI is installed and in your PATH.\n")
         sys.exit(1)
     except Exception as e:
-        console.print(f"\n[bold red]●[/bold red] [bold]Authentication Failed[/bold]")
+        console.print("\n[bold red]●[/bold red] [bold]Authentication Failed[/bold]")
         console.print(f"  [dim]Error:[/dim]  {str(e)}\n")
         sys.exit(1)
     finally:

@@ -1,16 +1,16 @@
-import os
-import json
 import asyncio
 import base64
-import tempfile
-import uuid
+import json
 import logging
 import mimetypes
+import os
+import tempfile
+import uuid
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Any
+from typing import Any, AsyncGenerator, Dict
 
+from ...core.browser import AccountBlockedError, CaptchaDetectedError, StealthTimeoutError
 from ..base import BaseProvider
-from ...core.browser import CaptchaDetectedError, AccountBlockedError, StealthTimeoutError
 
 logger = logging.getLogger("codex_auth")
 
@@ -157,7 +157,7 @@ class OpenAIProvider(BaseProvider):
                     
                 await asyncio.sleep(0.1)
                 
-            logger.info(f"[OpenAI] Generated response stream completed.")
+            logger.info("[OpenAI] Generated response stream completed.")
             
             for tmp_f in temp_files:
                 try: os.remove(tmp_f)

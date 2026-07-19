@@ -1,8 +1,7 @@
 import json
-import os
 import threading
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 _usage_lock = threading.Lock()
 

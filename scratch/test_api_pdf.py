@@ -1,6 +1,6 @@
+import base64
 import json
 import urllib.request
-import base64
 from pathlib import Path
 
 # Create a dummy text file to act as our document

@@ -1,7 +1,7 @@
 import json
-import os
-import pytest
+
 from codex_auth.auth_writer import write_auth_json
+
 
 def test_write_auth_json(tmp_path):
     # Setup test token data

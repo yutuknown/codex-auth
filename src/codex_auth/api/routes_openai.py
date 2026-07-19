@@ -1,19 +1,15 @@
-import time
 import json
 import logging
-import asyncio
-from typing import List, Optional, Union, Dict, Any
+import time
+from typing import Any, Dict, List, Union
+
+import tiktoken
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-import tiktoken
 
+from ..core.browser import AccountBlockedError, CaptchaDetectedError, StealthTimeoutError
 from ..providers.openai.provider import provider
-from ..core.browser import (
-    CaptchaDetectedError,
-    AccountBlockedError,
-    StealthTimeoutError
-)
 from ..usage import record_usage
 
 router = APIRouter()

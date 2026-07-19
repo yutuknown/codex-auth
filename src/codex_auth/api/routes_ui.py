@@ -1,6 +1,5 @@
-import json
-import os
 from pathlib import Path
+
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
@@ -21,7 +20,7 @@ async def get_logs():
 
 @router.get("/api/usage")
 async def get_usage():
-    from ..usage import get_usage_file, load_usage, PRICING, DEFAULT_PRICING
+    from ..usage import DEFAULT_PRICING, PRICING, get_usage_file, load_usage
     usage_file = get_usage_file()
     if usage_file.exists():
         try:
@@ -71,8 +70,8 @@ async def get_status():
 
 @router.get("/api/models_list")
 async def get_models_list():
+
     from .routes_openai import provider
-    import time
     
     real_models = await provider.fetch_models()
     models_out = []

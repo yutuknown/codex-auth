@@ -1,7 +1,7 @@
-import json
 import datetime
+import json
 from pathlib import Path
-from typing import Dict, Any
+
 
 def write_auth_json(tokens: dict, path: str) -> None:
     """

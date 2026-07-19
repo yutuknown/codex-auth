@@ -1,8 +1,9 @@
 import asyncio
 import json
-import time
 from pathlib import Path
+
 from playwright.async_api import async_playwright
+
 
 async def main():
     auth_file = Path(r"c:\Users\abhis\OneDrive\Documents\codex-auth\.codex\auth.json")

@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: codex-auth
+    runtime: docker
+    plan: standard
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: CODEX_AUTH_JSON
+        sync: false
+      - key: CODEX_AUTH_API_KEY
+        generateValue: true
+      - key: CODEX_AUTH_OPEN_DASHBOARD
+        value: "false"

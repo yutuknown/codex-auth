@@ -6,6 +6,8 @@ import sys
 import typer
 from rich.console import Console
 
+from ...config import get_auth_file
+
 
 def launch_native_browser(url: str):
     if sys.platform == "win32":
@@ -40,12 +42,14 @@ def login():
         if os.name == "nt":
             cmd = ["codex.cmd", "login"]
             
-        # FORCE codex to write to the local directory instead of global ~/.codex
-        # to satisfy the custom user rule for safe configuration management.
+        # Keep the official Codex CLI and this proxy on the same auth location.
         env = os.environ.copy()
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        env["HOME"] = repo_root
-        env["USERPROFILE"] = repo_root
+        auth_file = get_auth_file()
+        auth_file.parent.mkdir(parents=True, exist_ok=True)
+        auth_root = str(auth_file.parent.parent)
+        env["HOME"] = auth_root
+        env["USERPROFILE"] = auth_root
+        env["CODEX_HOME"] = str(auth_file.parent)
         
         process = subprocess.Popen(
             cmd,

@@ -1,14 +1,13 @@
 import asyncio
 import base64
-import json
 import logging
 import mimetypes
 import os
 import tempfile
 import uuid
-from pathlib import Path
 from typing import Any, AsyncGenerator, Dict
 
+from ...config import load_auth_data
 from ...core.browser import AccountBlockedError, CaptchaDetectedError, StealthTimeoutError
 from ..base import BaseProvider
 
@@ -21,15 +20,11 @@ class OpenAIProvider(BaseProvider):
         self.engine = None
 
     def load_session_token(self):
-        auth_file = Path(__file__).resolve().parent.parent.parent.parent.parent / ".codex" / "auth.json"
-        if not auth_file.exists():
-            raise Exception(f"Could not find auth.json at {auth_file}")
-        with open(auth_file, "r") as f:
-            data = json.load(f)
-            token = data.get("tokens", {}).get("refresh_token")
-            if not token:
-                raise Exception("Session token not found in auth.json")
-            return token
+        data = load_auth_data()
+        token = data.get("tokens", {}).get("refresh_token")
+        if not token:
+            raise Exception("Session token not found in auth configuration")
+        return token
 
     async def initialize(self, engine):
         self.engine = engine

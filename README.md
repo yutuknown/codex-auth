@@ -78,6 +78,21 @@ codex-auth start --port 8000
 ```
 *The proxy will listen on `http://127.0.0.1:8000`.*
 
+## Deploy on Render
+
+The repository includes a `Dockerfile` and `render.yaml` for a Render Blueprint deployment. The Blueprint uses a paid Standard web service with 2 GB RAM because Chromium is not a good fit for Render's 512 MB Free or Starter instances.
+
+1. Run `codex-auth auth` locally and locate the generated `.codex/auth.json`.
+2. Create a new Render Blueprint from this repository.
+3. When Render requests `CODEX_AUTH_JSON`, paste the complete contents of `auth.json`. Never commit this value.
+4. Render generates `CODEX_AUTH_API_KEY`. Use that value for API and dashboard requests:
+
+```text
+Authorization: Bearer <CODEX_AUTH_API_KEY>
+```
+
+The container binds to `0.0.0.0` on Render's `PORT`, installs Chromium and its Linux dependencies, and exposes `/healthz` for Render health checks. You can alternatively provide an auth file with `CODEX_AUTH_FILE`; Render Docker secret files are available under `/etc/secrets/`.
+
 ## 📸 Screenshots
 
 | Authentication Setup | API Server Logs | CLI Chat Interface |

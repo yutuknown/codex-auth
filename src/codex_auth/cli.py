@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import sys
-from pathlib import Path
 
 import typer
 import uvicorn
@@ -21,6 +20,7 @@ import typer.rich_utils
 
 from . import __version__
 from .chat import run_chat
+from .config import auth_is_configured, get_auth_file, load_auth_data
 from .providers.openai.auth import login
 from .usage import format_tokens, load_usage
 
@@ -59,19 +59,31 @@ def main(
 
 @app.command()
 def start(
-    host: str = typer.Option("127.0.0.1", "--host", "-h", help="The host to bind the proxy server to."),
-    port: int = typer.Option(8000, "--port", "-p", help="The port to run the proxy server on."),
+    host: str = typer.Option(
+        lambda: os.environ.get("HOST", "127.0.0.1"),
+        "--host",
+        "-h",
+        help="The host to bind the proxy server to.",
+    ),
+    port: int = typer.Option(
+        lambda: int(os.environ.get("PORT", "8000")),
+        "--port",
+        "-p",
+        help="The port to run the proxy server on.",
+    ),
     reload: bool = typer.Option(False, "--reload", "-r", help="Enable auto-reload for development."),
 ):
     """
     Start the Codex-Auth Stealth Proxy API server.
     """
     # Quick sanity check for auth token
-    auth_file = Path(__file__).resolve().parent.parent.parent / ".codex" / "auth.json"
-    if not auth_file.exists():
+    if not auth_is_configured():
         console.print("\n[bold red]●[/bold red] [bold]Authentication Missing[/bold]")
-        console.print("  [dim]Error:[/dim]  Could not find a valid `.codex/auth.json` token.")
-        console.print("  [dim]Action:[/dim] Run [bold]codex-auth auth[/bold] first before starting the proxy.\n")
+        console.print("  [dim]Error:[/dim]  Could not find valid Codex authentication.")
+        console.print(
+            "  [dim]Action:[/dim] Run [bold]codex-auth auth[/bold], or configure "
+            "[bold]CODEX_AUTH_JSON[/bold] for a hosted service.\n"
+        )
         raise typer.Exit(code=1)
 
     console.print("\n[bold green]●[/bold green] [bold]Starting Codex-Auth Proxy[/bold]")
@@ -147,21 +159,23 @@ def status():
     """
     Check the health and configuration status of the Codex-Auth setup.
     """
-    auth_file = Path(__file__).resolve().parent.parent.parent / ".codex" / "auth.json"
+    auth_file = get_auth_file()
+    is_authenticated = auth_is_configured()
     
     # 1. Header
     console.print(f"\n[bold]Codex-Auth[/bold] [dim]v{__version__}[/dim]\n")
     
     # 2. Authentication Status
-    if auth_file.exists():
+    if is_authenticated:
         console.print("[bold green]●[/bold green] [bold]Authentication[/bold]")
         console.print("  [dim]Status:[/dim]  [green]Active[/green]")
-        console.print(f"  [dim]Path:[/dim]    {auth_file.name}\n")
+        auth_source = "CODEX_AUTH_JSON" if os.environ.get("CODEX_AUTH_JSON") else str(auth_file)
+        console.print(f"  [dim]Source:[/dim]  {auth_source}\n")
         
         # Parse Account Details from JWT
         try:
-            with open(auth_file, "r") as f:
-                auth_data = json.load(f)
+            auth_data = load_auth_data()
+            if auth_data:
                 id_token = auth_data.get("tokens", {}).get("id_token", "")
                 if id_token and "." in id_token:
                     payload_b64 = id_token.split(".")[1]

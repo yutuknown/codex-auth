@@ -3,6 +3,8 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
+from ..config import auth_is_configured, get_auth_file
+
 router = APIRouter()
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -60,11 +62,12 @@ async def get_usage():
 
 @router.get("/api/status")
 async def get_status():
-    auth_file = Path(__file__).resolve().parent.parent.parent.parent / ".codex" / "auth.json"
-    is_authenticated = auth_file.exists()
+    auth_file = get_auth_file()
+    is_authenticated = auth_is_configured()
+    auth_source = "CODEX_AUTH_JSON" if is_authenticated and not auth_file.exists() else str(auth_file.absolute())
     return {
         "status": "Active" if is_authenticated else "Missing Authentication",
-        "auth_file_path": str(auth_file.absolute()) if is_authenticated else None,
+        "auth_file_path": auth_source if is_authenticated else None,
         "is_authenticated": is_authenticated
     }
 

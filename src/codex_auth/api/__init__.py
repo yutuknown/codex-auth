@@ -1,4 +1,6 @@
 import logging
+import os
+import secrets
 import threading
 import time
 import webbrowser
@@ -7,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from rich.logging import RichHandler
 
 from ..core.browser import engine
@@ -57,8 +60,10 @@ def auto_open_dashboard():
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    # Start the browser auto-open in a background thread so it doesn't block startup
-    threading.Thread(target=auto_open_dashboard, daemon=True).start()
+    # Open the dashboard for local use, but not in hosted/container environments.
+    open_dashboard = os.environ.get("CODEX_AUTH_OPEN_DASHBOARD", "true").lower()
+    if open_dashboard not in {"0", "false", "no"}:
+        threading.Thread(target=auto_open_dashboard, daemon=True).start()
     
     # Delegate the heavy Playwright initialization to the generic engine
     async with engine.lifespan():
@@ -70,8 +75,29 @@ from fastapi import Request
 
 app = FastAPI(title="ChatGPT Stealth API", lifespan=app_lifespan)
 
+
+def api_key_is_valid(request: Request, expected_key: str) -> bool:
+    authorization = request.headers.get("Authorization", "")
+    bearer_key = authorization[7:] if authorization.lower().startswith("bearer ") else ""
+    supplied_key = bearer_key or request.headers.get("X-API-Key", "")
+    return bool(supplied_key) and secrets.compare_digest(supplied_key, expected_key)
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthcheck():
+    return {"status": "ok"}
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    expected_key = os.environ.get("CODEX_AUTH_API_KEY")
+    if expected_key and request.url.path != "/healthz" and not api_key_is_valid(request, expected_key):
+        return JSONResponse(
+            status_code=401,
+            content={"error": {"message": "Invalid or missing API key", "type": "authentication_error"}},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
@@ -97,8 +123,6 @@ app.add_middleware(
 )
 
 # Import and include routers below to avoid circular imports
-import os
-
 from fastapi.staticfiles import StaticFiles
 
 from .routes_ollama import router as ollama_router

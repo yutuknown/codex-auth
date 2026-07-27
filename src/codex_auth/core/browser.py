@@ -30,7 +30,17 @@ class PlaywrightEngine:
         """
         logger.info("[API] Starting Stealth Playwright Engine...")
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=True)
+        self.browser = await self.playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-background-networking",
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+                "--disable-gpu",
+                "--disable-renderer-backgrounding",
+                "--renderer-process-limit=1",
+            ],
+        )
         yield self
         
         logger.info("[API] Shutting down Playwright Engine...")

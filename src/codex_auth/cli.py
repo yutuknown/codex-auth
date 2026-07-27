@@ -88,7 +88,8 @@ def start(
 
     console.print("\n[bold green]●[/bold green] [bold]Starting Codex-Auth Proxy[/bold]")
     console.print(f"  [dim]Base URL:[/dim] [cyan]http://{host}:{port}/v1[/cyan]")
-    console.print("  [dim]API Key:[/dim]  [dim](Any dummy string works)[/dim]\n")
+    api_key_status = "Required" if os.environ.get("CODEX_AUTH_API_KEY") else "Disabled (local mode)"
+    console.print(f"  [dim]API Key:[/dim]  [dim]{api_key_status}[/dim]\n")
     
     # Pre-flight port check — give a clean error before uvicorn crashes with WinError 10048
     import socket

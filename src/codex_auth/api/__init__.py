@@ -101,6 +101,10 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
+
+    if request.url.path == "/healthz" or request.url.path.startswith(("/api/", "/v1/", "/backend-api/")):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
     
     path = request.url.path
     if not path.startswith(("/dashboard", "/api/logs", "/api/usage", "/api/status", "/api/models_list")):

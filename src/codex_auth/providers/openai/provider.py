@@ -38,6 +38,7 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_ATTACHMENTS = 4
 MAX_ADMITTED_GENERATIONS = 4
 METADATA_CACHE_SECONDS = 300
+AUTH_FAILURE_STATUS_CODES = {401, 403}
 
 
 class ChatGPTSessionError(RuntimeError):
@@ -316,7 +317,7 @@ class OpenAIProvider(BaseProvider):
             headers=request_headers,
             **kwargs,
         )
-        if response.status_code != 401:
+        if response.status_code not in AUTH_FAILURE_STATUS_CODES:
             return response
         with self.token_refresh_lock:
             refreshed = self.access_token != token_used or self._refresh_access_token_sync()
@@ -329,7 +330,7 @@ class OpenAIProvider(BaseProvider):
                 headers=request_headers,
                 **kwargs,
             )
-            if response.status_code != 401:
+            if response.status_code not in AUTH_FAILURE_STATUS_CODES:
                 return response
         response.close()
         cookie_headers = dict(request_headers)
@@ -340,7 +341,7 @@ class OpenAIProvider(BaseProvider):
             headers=cookie_headers,
             **kwargs,
         )
-        if response.status_code != 401:
+        if response.status_code not in AUTH_FAILURE_STATUS_CODES:
             self.auth_mode = "cookie_only"
         return response
 

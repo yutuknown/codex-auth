@@ -249,7 +249,10 @@ def test_authenticated_request_refreshes_cookie_token_once_after_401():
     ]
 
 
-def test_authenticated_request_falls_back_to_cookie_only_when_refresh_is_stale():
+@pytest.mark.parametrize("auth_failure_status", [401, 403])
+def test_authenticated_request_falls_back_to_cookie_only_when_refresh_is_stale(
+    auth_failure_status,
+):
     class FakeResponse:
         def __init__(self, status_code, body=None):
             self.status_code = status_code
@@ -267,7 +270,9 @@ def test_authenticated_request_falls_back_to_cookie_only_when_refresh_is_stale()
 
         def request(self, method, url, headers, **kwargs):
             self.authorization_headers.append(headers.get("Authorization"))
-            return FakeResponse(401 if len(self.authorization_headers) == 1 else 200)
+            return FakeResponse(
+                auth_failure_status if len(self.authorization_headers) == 1 else 200
+            )
 
         def get(self, url, timeout):
             return FakeResponse(200, {"accessToken": "stale-token"})

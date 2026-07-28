@@ -9,7 +9,7 @@ from codex_auth.api import (
     log_stream_lock,
     pending_request_traces,
 )
-from codex_auth.providers.openai.provider import provider
+from codex_auth.providers.openai.provider import ChatGPTSessionError, provider
 
 
 def _isolated_logger():
@@ -115,3 +115,46 @@ def test_completion_response_is_available_on_exact_http_log_row(monkeypatch):
     assert request_log["path"] == "/v1/chat/completions"
     assert request_log["trace_data"]["response"] == "inspector response proof"
     assert request_log["trace_data"]["total_tokens"] > 0
+    assert request_log["trace_data"]["request_headers"]["authorization"] == "[REDACTED]"
+    assert request_log["trace_data"]["response_headers"]["x-request-id"] == request_id
+
+
+def test_upstream_error_payload_is_captured_on_failed_http_row(monkeypatch):
+    _reset_trace_state()
+
+    async def failing_generate_stream(*args, **kwargs):
+        if False:
+            yield ""
+        raise ChatGPTSessionError("upstream rejected request")
+
+    monkeypatch.setenv("CODEX_AUTH_API_KEY", "test-key")
+    monkeypatch.setattr(provider, "generate_stream", failing_generate_stream)
+    handler = StreamHandler()
+    api_logger = logging.getLogger("codex_auth")
+    previous_level = api_logger.level
+    api_logger.setLevel(logging.INFO)
+    api_logger.addHandler(handler)
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer test-key"},
+            json={"messages": [{"role": "user", "content": "Fail safely"}]},
+        )
+        logs = client.get(
+            "/api/logs",
+            headers={"Authorization": "Bearer test-key"},
+        ).json()["logs"]
+    finally:
+        api_logger.removeHandler(handler)
+        api_logger.setLevel(previous_level)
+
+    request_log = next(
+        entry
+        for entry in reversed(logs)
+        if entry.get("request_id") == response.headers["x-request-id"] and entry.get("is_http")
+    )
+    assert response.status_code == 502
+    assert request_log["trace_data"]["status"] == 502
+    assert "upstream rejected request" in request_log["trace_data"]["response"]
+    assert request_log["trace_data"]["response_data"]["finish_reason"] == "error"

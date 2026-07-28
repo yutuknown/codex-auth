@@ -24,6 +24,20 @@ pending_request_traces = OrderedDict()
 log_stream_lock = threading.Lock()
 MAX_PENDING_REQUEST_TRACES = 100
 MAX_REQUEST_BODY_BYTES = 30 * 1024 * 1024
+SENSITIVE_HEADER_NAMES = {
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+    "x-api-key",
+}
+
+
+def sanitized_headers(headers) -> dict[str, str]:
+    return {
+        name.lower(): "[REDACTED]" if name.lower() in SENSITIVE_HEADER_NAMES else value[:512]
+        for name, value in headers.items()
+    }
 
 class StreamHandler(logging.Handler):
     def emit(self, record):
@@ -52,10 +66,14 @@ class StreamHandler(logging.Handler):
                 log_entry['path'] = getattr(record, 'path', '')
                 log_entry['status'] = getattr(record, 'status', 0)
                 log_entry['latency_ms'] = getattr(record, 'latency_ms', 0)
+                log_entry["request_headers"] = getattr(record, "request_headers", {})
+                log_entry["response_headers"] = getattr(record, "response_headers", {})
             with log_stream_lock:
                 if trace_data and request_id:
                     for existing in reversed(log_stream):
                         if existing.get("is_http") and existing.get("request_id") == request_id:
+                            trace_data.setdefault("request_headers", existing.get("request_headers", {}))
+                            trace_data.setdefault("response_headers", existing.get("response_headers", {}))
                             existing["trace_data"] = trace_data
                             existing["trace_message"] = msg_clean
                             return
@@ -68,6 +86,12 @@ class StreamHandler(logging.Handler):
                     pending = pending_request_traces.pop(request_id, None)
                     if pending:
                         log_entry["trace_data"], log_entry["trace_message"] = pending
+                        log_entry["trace_data"].setdefault(
+                            "request_headers", log_entry["request_headers"]
+                        )
+                        log_entry["trace_data"].setdefault(
+                            "response_headers", log_entry["response_headers"]
+                        )
                 elif trace_data:
                     log_entry["trace_data"] = trace_data
                 log_stream.append(log_entry)
@@ -196,7 +220,9 @@ async def log_requests(request: Request, call_next):
                 "method": request.method,
                 "path": path,
                 "status": response.status_code,
-                "latency_ms": round(process_time * 1000, 2)
+                "latency_ms": round(process_time * 1000, 2),
+                "request_headers": sanitized_headers(request.headers),
+                "response_headers": sanitized_headers(response.headers),
             })
 
         return response

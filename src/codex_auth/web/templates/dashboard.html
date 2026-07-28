@@ -551,7 +551,7 @@
             min-height: 54px;
         }
         
-        .panel-metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }
+        .panel-metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
         .panel-metric { background: var(--bg-code); border: 1px solid var(--border-subtle); padding: 12px; border-radius: 6px; }
         .panel-metric label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; }
         .panel-metric div { font-size: 16px; font-weight: 600; font-family: var(--font-mono); margin-top: 4px; }
@@ -874,18 +874,36 @@
                         <label>Mode</label>
                         <div id="trace-mode">-</div>
                     </div>
+                    <div class="panel-metric">
+                        <label>Messages</label>
+                        <div id="trace-message-count">-</div>
+                    </div>
+                    <div class="panel-metric">
+                        <label>Attachments</label>
+                        <div id="trace-attachment-count">-</div>
+                    </div>
                 </div>
                 <div class="trace-request-id" id="trace-request-id">Request ID: -</div>
                 <div class="trace-section-header"><h4>Log Message</h4></div>
                 <div class="json-block" id="trace-message"></div>
+                <div class="trace-section-header">
+                    <h4>Transaction Details</h4>
+                    <button class="trace-copy-btn" onclick="copyTraceValue('trace-overview-details', this)">Copy</button>
+                </div>
+                <div class="json-block" id="trace-overview-details"></div>
             </div>
             
             <div id="tab-payload" class="panel-pane">
                 <div class="trace-section-header">
-                    <h4>Sanitized Request Payload</h4>
-                    <button class="trace-copy-btn" onclick="copyTraceValue('trace-messages', this)">Copy</button>
+                    <h4>Request Envelope</h4>
+                    <div>
+                        <span class="trace-meta">Text ≤16K · binary metadata only · </span>
+                        <button class="trace-copy-btn" onclick="copyTraceValue('trace-messages', this)">Copy</button>
+                    </div>
                 </div>
                 <div class="json-block" id="trace-messages"></div>
+                <div class="trace-section-header"><h4>Headers</h4></div>
+                <div class="json-block" id="trace-request-headers"></div>
             </div>
             
             <div id="tab-response" class="panel-pane">
@@ -897,6 +915,13 @@
                     </div>
                 </div>
                 <div class="json-block" id="trace-response"></div>
+                <div class="trace-section-header">
+                    <h4>Response Envelope</h4>
+                    <button class="trace-copy-btn" onclick="copyTraceValue('trace-response-details', this)">Copy</button>
+                </div>
+                <div class="json-block" id="trace-response-details"></div>
+                <div class="trace-section-header"><h4>Headers</h4></div>
+                <div class="json-block" id="trace-response-headers"></div>
             </div>
         </div>
     </div>
@@ -1050,17 +1075,70 @@
                 trace.total_tokens !== undefined ? `${trace.total_tokens} total` : '-';
             document.getElementById('trace-mode').textContent =
                 trace.stream === undefined ? '-' : `${trace.stream ? 'Stream' : 'Buffered'}${trace.web_search ? ' + Search' : ''}`;
+            document.getElementById('trace-message-count').textContent =
+                trace.message_count !== undefined ? trace.message_count : '-';
+            document.getElementById('trace-attachment-count').textContent =
+                trace.attachment_count !== undefined ? trace.attachment_count : '-';
             document.getElementById('trace-request-id').textContent =
                 `Request ID: ${trace.request_id || log.request_id || '-'}`;
             document.getElementById('trace-message').textContent = log.trace_message || log.message;
-            
-            document.getElementById('trace-messages').textContent = trace.messages ? JSON.stringify(trace.messages, null, 2) : 'No payload captured for this route.';
+
+            const overviewDetails = {
+                method,
+                path: trace.path || log.path || null,
+                status,
+                latency_ms: log.latency_ms ?? null,
+                request_id: trace.request_id || log.request_id || null,
+                model: trace.model || null,
+                timing: {
+                    ttft_ms: trace.ttft_ms ?? null,
+                    generation_seconds: trace.generation_s ?? null
+                },
+                usage: {
+                    prompt_tokens: trace.prompt_tokens ?? null,
+                    completion_tokens: trace.completion_tokens ?? null,
+                    total_tokens: trace.total_tokens ?? null
+                },
+                capture: {
+                    response_characters: trace.response_characters ?? null,
+                    response_truncated: trace.response_truncated ?? false,
+                    chunk_count: trace.chunk_count ?? null
+                }
+            };
+            document.getElementById('trace-overview-details').textContent = JSON.stringify(overviewDetails, null, 2);
+
+            const requestEnvelope = trace.payload
+                ? {...trace.payload, messages: trace.messages || []}
+                : trace.messages
+                    ? {messages: trace.messages}
+                    : null;
+            document.getElementById('trace-messages').textContent = requestEnvelope
+                ? JSON.stringify(requestEnvelope, null, 2)
+                : 'No payload captured for this route.';
+            document.getElementById('trace-request-headers').textContent = JSON.stringify(
+                trace.request_headers || log.request_headers || {},
+                null,
+                2
+            );
             document.getElementById('trace-response').textContent =
                 trace.response || (log.is_http ? 'Response body capture is not enabled for this route.' : 'No response captured.');
             const responseCharacters = trace.response_characters ?? trace.response?.length;
             document.getElementById('trace-response-meta').textContent = responseCharacters === undefined
                 ? ''
-                : `${responseCharacters.toLocaleString()} chars${trace.response_truncated ? ' · truncated at 8 KB' : ''} · `;
+                : `${responseCharacters.toLocaleString()} chars${trace.response_truncated ? ' · truncated at 16 KB' : ''} · `;
+            document.getElementById('trace-response-details').textContent = JSON.stringify(
+                trace.response_data || {
+                    status,
+                    body_capture: trace.response ? 'captured' : 'not_enabled'
+                },
+                null,
+                2
+            );
+            document.getElementById('trace-response-headers').textContent = JSON.stringify(
+                trace.response_headers || log.response_headers || {},
+                null,
+                2
+            );
             
             document.getElementById('trace-panel').classList.add('open');
         }

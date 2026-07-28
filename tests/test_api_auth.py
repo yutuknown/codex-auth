@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from codex_auth.api import api_key_is_valid, app, dashboard_session_value
+from codex_auth.api import api_key_is_valid, app, dashboard_session_value, sanitized_headers
 
 
 def make_request(headers=None):
@@ -16,6 +16,24 @@ def test_api_key_accepts_bearer_token():
     request = make_request({"Authorization": "Bearer render-secret"})
 
     assert api_key_is_valid(request, "render-secret")
+
+
+def test_trace_headers_redact_credentials_and_bound_values():
+    headers = sanitized_headers(
+        {
+            "Authorization": "Bearer secret",
+            "Cookie": "session=secret",
+            "X-API-Key": "secret",
+            "Content-Type": "application/json",
+            "X-Long": "x" * 600,
+        }
+    )
+
+    assert headers["authorization"] == "[REDACTED]"
+    assert headers["cookie"] == "[REDACTED]"
+    assert headers["x-api-key"] == "[REDACTED]"
+    assert headers["content-type"] == "application/json"
+    assert len(headers["x-long"]) == 512
 
 
 def test_api_key_accepts_x_api_key():

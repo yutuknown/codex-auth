@@ -8,6 +8,7 @@ from codex_auth.api.routes_openai import (
     ChatCompletionRequest,
     ChatMessage,
     _request_input,
+    _trace_data,
     _trace_messages,
     openai_chat_completions,
 )
@@ -72,6 +73,87 @@ def test_trace_messages_never_retains_attachment_payload():
     assert secret_base64 not in serialized
     assert trace[0]["parts"][1]["source"] == "data_url"
     assert trace[0]["parts"][1]["name"] == "proof.txt"
+    assert trace[0]["parts"][1]["mime_type"] == "text/plain"
+    assert trace[0]["parts"][1]["content"] == "[BINARY CONTENT REDACTED]"
+
+
+def test_trace_captures_image_file_and_tool_metadata_without_binary_content():
+    png = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZFlAAAAAASUVORK5CYII="
+    )
+    request = ChatCompletionRequest(
+        model="gpt-test",
+        stream=True,
+        web_search=True,
+        messages=[
+            ChatMessage(
+                role="user",
+                content=[
+                    {"type": "text", "text": "Inspect everything"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": png, "name": "pixel.png"},
+                    },
+                    {
+                        "type": "file_url",
+                        "file_url": {
+                            "url": "https://files.example/report.pdf?secret=signed-value",
+                            "name": "report.pdf",
+                            "mime_type": "application/pdf",
+                        },
+                    },
+                ],
+            )
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Look up a record",
+                    "parameters": {"type": "object", "properties": {"id": {"type": "string"}}},
+                },
+            }
+        ],
+        tool_choice="auto",
+    )
+
+    trace = _trace_data(
+        request,
+        "gpt-test",
+        "captured answer",
+        120,
+        1.5,
+        20,
+        4,
+        chunk_count=3,
+    )
+    image = trace["messages"][0]["parts"][1]
+    document = trace["messages"][0]["parts"][2]
+    serialized = json.dumps(trace)
+
+    assert png not in serialized
+    assert "signed-value" not in serialized
+    assert image["mime_type"] == "image/png"
+    assert image["width"] == 1
+    assert image["height"] == 1
+    assert image["estimated_bytes"] > 0
+    assert document["location"]["origin"] == "https://files.example"
+    assert document["location"]["query"] == "[REDACTED]"
+    assert trace["payload"]["attachment_count"] == 2
+    assert trace["payload"]["tools"][0]["name"] == "lookup"
+    assert trace["response_data"]["stream"]["chunk_count"] == 3
+    assert trace["response_data"]["usage"]["total_tokens"] == 24
+
+
+def test_trace_text_capture_has_aggregate_memory_bound():
+    messages = [ChatMessage(role="user", content=str(index) * 5000) for index in range(10)]
+
+    trace = _trace_messages(messages)
+
+    assert sum(len(message["text"]) for message in trace) == 16000
+    assert all(message["text_truncated"] for message in trace)
 
 
 def test_function_tools_fail_explicitly_instead_of_being_ignored():

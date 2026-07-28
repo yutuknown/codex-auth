@@ -15,7 +15,7 @@ Single asyncio admission lock
     v
 Worker thread (one active upstream request)
     |
-    +--> session validation / access-token exchange
+    +--> session validation / bounded cookie-token refresh
     +--> Sentinel requirements and local proof-of-work
     +--> optional file registration and direct blob upload
     +--> isolated upstream conversation creation
@@ -37,20 +37,22 @@ OpenAI-compatible response
 4. Admit one generation at a time because the authenticated upstream session
    has mutable Sentinel and conversation state.
 5. Reuse one TLS session and one in-memory cookie jar.
-6. Compute Sentinel proof locally with a bounded loop.
-7. Upload image/document bytes directly to the authenticated ChatGPT file
+6. On an authenticated upstream 401, exchange the existing cookie session for
+   a fresh access token and retry that request once.
+7. Compute Sentinel proof locally with a bounded loop.
+8. Upload image/document bytes directly to the authenticated ChatGPT file
    service when attachments are present.
-8. Use the regular conversation endpoint to create an isolated conversation,
+9. Use the regular conversation endpoint to create an isolated conversation,
    attaching multimodal pointers or enabling the web tool when requested.
-9. Parse assistant text and conversation identifiers from SSE.
-10. Fetch the canonical completed assistant message from the registered
+10. Parse assistant text and conversation identifiers from SSE.
+11. Fetch the canonical completed assistant message from the registered
    conversation before replying. This reconciles tool/citation event shapes that
    cannot be reconstructed reliably from incremental patches alone.
-11. Put chunks onto an async queue so the synchronous TLS client does not block
+12. Put chunks onto an async queue so the synchronous TLS client does not block
    the FastAPI event loop.
-12. Store only bounded, sanitized trace summaries; never retain base64
+13. Store only bounded, sanitized trace summaries; never retain base64
    attachment bodies or public file URLs in dashboard logs.
-13. Return `Cache-Control: no-store` and retain no prompt history in the proxy.
+14. Return `Cache-Control: no-store` and retain no prompt history in the proxy.
 
 Memory usage is bounded by the Python process, cookie/model metadata, the SSE
 response buffer maintained by the HTTP library, and short response strings.

@@ -230,6 +230,7 @@ class OpenAIProvider(BaseProvider):
         self.lock = asyncio.Lock()
         self.admission = asyncio.Semaphore(MAX_ADMITTED_GENERATIONS)
         self.metadata_lock = asyncio.Lock()
+        self.token_refresh_lock = threading.Lock()
         self.auth_mode = "cookie_exchange"
         self.cookie_metadata: list[dict[str, Any]] = []
         self.initialized_at = time.time()
@@ -282,6 +283,53 @@ class OpenAIProvider(BaseProvider):
             )
         return headers
 
+    def _refresh_access_token_sync(self) -> bool:
+        assert self.session
+        response = self.session.get(BASE_URL + "/api/auth/session", timeout=30)
+        if response.status_code != 200:
+            return False
+        access_token = (response.json() or {}).get("accessToken", "")
+        if not access_token:
+            return False
+        self.access_token = access_token
+        self.auth_mode = "cookie_refresh"
+        self._account_cache = None
+        self._models_cache = None
+        logger.info("[OpenAI] Refreshed the access token from the authenticated cookie session")
+        return True
+
+    def _authenticated_request(
+        self,
+        method: str,
+        target: str,
+        *,
+        headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ):
+        assert self.session
+        request_headers = dict(headers or self._headers(target))
+        token_used = self.access_token
+        response = self.session.request(
+            method,
+            BASE_URL + target,
+            headers=request_headers,
+            **kwargs,
+        )
+        if response.status_code != 401:
+            return response
+        with self.token_refresh_lock:
+            refreshed = self.access_token != token_used or self._refresh_access_token_sync()
+        if not refreshed:
+            return response
+        response.close()
+        request_headers["Authorization"] = f"Bearer {self.access_token}"
+        return self.session.request(
+            method,
+            BASE_URL + target,
+            headers=request_headers,
+            **kwargs,
+        )
+
     def _initialize_sync(self) -> None:
         self.session = Session(impersonate="chrome")
         self.cookie_metadata = parse_netscape_cookies(load_cookie_text())
@@ -323,8 +371,9 @@ class OpenAIProvider(BaseProvider):
 
     def _chat_requirements(self) -> tuple[str, str | None]:
         assert self.session
-        response = self.session.post(
-            BASE_URL + "/backend-api/sentinel/chat-requirements",
+        response = self._authenticated_request(
+            "POST",
+            "/backend-api/sentinel/chat-requirements",
             headers=self._headers("/backend-api/sentinel/chat-requirements"),
             json={"p": _requirements_token()},
             timeout=30,
@@ -454,8 +503,9 @@ class OpenAIProvider(BaseProvider):
         if width and height:
             create_body.update({"width": width, "height": height})
 
-        create_response = self.session.post(
-            BASE_URL + "/backend-api/files",
+        create_response = self._authenticated_request(
+            "POST",
+            "/backend-api/files",
             headers=self._headers("/backend-api/files", accept="application/json"),
             json=create_body,
             timeout=30,
@@ -491,8 +541,9 @@ class OpenAIProvider(BaseProvider):
         if upload_response.status_code not in {200, 201}:
             raise ChatGPTSessionError(f"File blob upload failed with HTTP {upload_response.status_code}")
 
-        uploaded_response = self.session.post(
-            BASE_URL + f"/backend-api/files/{file_id}/uploaded",
+        uploaded_response = self._authenticated_request(
+            "POST",
+            f"/backend-api/files/{file_id}/uploaded",
             headers=self._headers(f"/backend-api/files/{file_id}/uploaded", accept="application/json"),
             json={},
             timeout=30,
@@ -583,8 +634,9 @@ class OpenAIProvider(BaseProvider):
         }
         if web_search:
             payload["force_use_tool"] = "web"
-        response = self.session.post(
-            BASE_URL + "/backend-api/f/conversation/prepare",
+        response = self._authenticated_request(
+            "POST",
+            "/backend-api/f/conversation/prepare",
             headers=headers,
             json=payload,
             timeout=30,
@@ -633,8 +685,9 @@ class OpenAIProvider(BaseProvider):
         target = f"/backend-api/conversation/{conversation_id}"
         best_text = ""
         for attempt in range(3):
-            response = self.session.get(
-                BASE_URL + target,
+            response = self._authenticated_request(
+                "GET",
+                target,
                 headers=self._headers(target, accept="application/json"),
                 timeout=30,
             )
@@ -694,8 +747,9 @@ class OpenAIProvider(BaseProvider):
             payload["force_use_tool"] = "web"
         if client_prepare_state:
             payload["client_prepare_state"] = client_prepare_state
-        response = self.session.post(
-            BASE_URL + target,
+        response = self._authenticated_request(
+            "POST",
+            target,
             headers=headers,
             json=payload,
             stream=True,
@@ -821,8 +875,9 @@ class OpenAIProvider(BaseProvider):
 
         def fetch() -> list[Dict[str, Any]]:
             assert self.session
-            response = self.session.get(
-                BASE_URL + "/backend-api/models",
+            response = self._authenticated_request(
+                "GET",
+                "/backend-api/models",
                 headers=self._headers("/backend-api/models"),
                 timeout=30,
             )
@@ -885,18 +940,21 @@ class OpenAIProvider(BaseProvider):
     def _fetch_account_details_sync(self) -> dict[str, Any]:
         assert self.session
         headers = self._headers("/backend-api/accounts/check/v4-2023-04-27")
-        account_response = self.session.get(
-            BASE_URL + "/backend-api/accounts/check/v4-2023-04-27",
+        account_response = self._authenticated_request(
+            "GET",
+            "/backend-api/accounts/check/v4-2023-04-27",
             headers=headers,
             timeout=30,
         )
-        me_response = self.session.get(
-            BASE_URL + "/backend-api/me",
+        me_response = self._authenticated_request(
+            "GET",
+            "/backend-api/me",
             headers=self._headers("/backend-api/me"),
             timeout=30,
         )
-        settings_response = self.session.get(
-            BASE_URL + "/backend-api/settings/user",
+        settings_response = self._authenticated_request(
+            "GET",
+            "/backend-api/settings/user",
             headers=self._headers("/backend-api/settings/user"),
             timeout=30,
         )
@@ -985,9 +1043,9 @@ class OpenAIProvider(BaseProvider):
     ) -> tuple[int, str, bytes]:
         def request() -> tuple[int, str, bytes]:
             assert self.session
-            response = self.session.request(
+            response = self._authenticated_request(
                 method,
-                BASE_URL + "/backend-api/" + path.lstrip("/"),
+                "/backend-api/" + path.lstrip("/"),
                 headers=self._headers("/backend-api/" + path.lstrip("/")),
                 json=body,
                 timeout=60,

@@ -172,3 +172,47 @@ def test_build_document_message_uses_attachment_metadata_without_image_pointer()
 def test_remote_file_url_rejects_private_network_targets():
     with pytest.raises(ChatGPTSessionError, match="private or local"):
         OpenAIProvider._validate_remote_file_url("http://127.0.0.1/private.txt")
+
+
+def test_authenticated_request_refreshes_cookie_token_once_after_401():
+    class FakeResponse:
+        def __init__(self, status_code, body=None):
+            self.status_code = status_code
+            self._body = body or {}
+            self.closed = False
+
+        def json(self):
+            return self._body
+
+        def close(self):
+            self.closed = True
+
+    class FakeSession:
+        def __init__(self):
+            self.authorization_headers = []
+            self.first_response = FakeResponse(401)
+
+        def request(self, method, url, headers, **kwargs):
+            self.authorization_headers.append(headers["Authorization"])
+            if len(self.authorization_headers) == 1:
+                return self.first_response
+            return FakeResponse(200)
+
+        def get(self, url, timeout):
+            return FakeResponse(200, {"accessToken": "refreshed-token"})
+
+    provider = OpenAIProvider()
+    provider.session = FakeSession()
+    provider.access_token = "expired-token"
+    provider.device_id = "device"
+
+    response = provider._authenticated_request("GET", "/backend-api/me")
+
+    assert response.status_code == 200
+    assert provider.access_token == "refreshed-token"
+    assert provider.auth_mode == "cookie_refresh"
+    assert provider.session.first_response.closed
+    assert provider.session.authorization_headers == [
+        "Bearer expired-token",
+        "Bearer refreshed-token",
+    ]

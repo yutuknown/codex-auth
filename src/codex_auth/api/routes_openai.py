@@ -21,7 +21,7 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: str = "auto"
-    messages: List[ChatMessage] = Field(..., min_items=1)
+    messages: List[ChatMessage] = Field(..., min_length=1)
     stream: bool = False
     web_search: bool = False
 

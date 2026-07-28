@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import secrets
@@ -79,7 +80,16 @@ def api_key_is_valid(request: Request, expected_key: str) -> bool:
     authorization = request.headers.get("Authorization", "")
     bearer_key = authorization[7:] if authorization.lower().startswith("bearer ") else ""
     supplied_key = bearer_key or request.headers.get("X-API-Key", "")
-    return bool(supplied_key) and secrets.compare_digest(supplied_key, expected_key)
+    if supplied_key and secrets.compare_digest(supplied_key, expected_key):
+        return True
+    expected_session = dashboard_session_value(expected_key)
+    supplied_session = request.cookies.get("codex_auth_dashboard", "")
+    return bool(supplied_session) and secrets.compare_digest(supplied_session, expected_session)
+
+
+def dashboard_session_value(api_key: str) -> str:
+    """Derive a browser-session value without storing the raw API key in the cookie."""
+    return hashlib.sha256(f"codex-auth-dashboard:{api_key}".encode()).hexdigest()
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -90,7 +100,13 @@ async def healthcheck():
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     expected_key = os.environ.get("CODEX_AUTH_API_KEY")
-    if expected_key and request.url.path != "/healthz" and not api_key_is_valid(request, expected_key):
+    public_paths = {"/", "/healthz", "/login"}
+    is_public = request.url.path in public_paths or request.url.path.startswith("/assets/")
+    if expected_key and not is_public and not api_key_is_valid(request, expected_key):
+        if request.url.path == "/dashboard":
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse("/login", status_code=303)
         return JSONResponse(
             status_code=401,
             content={"error": {"message": "Invalid or missing API key", "type": "authentication_error"}},

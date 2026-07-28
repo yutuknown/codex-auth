@@ -1,53 +1,94 @@
-# Codex-Auth
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo.svg">
+    <img alt="Codex-Auth Logo" src="assets/logo.svg" width="300">
+  </picture>
 
-Codex-Auth exposes an OpenAI-compatible API backed by an authenticated
-ChatGPT web session. It talks to ChatGPT over HTTP with `curl-cffi`; Chromium
-and Playwright are not used at runtime.
+  # Codex-Auth
 
-> This project calls undocumented ChatGPT web endpoints. They can change
-> without notice. A ChatGPT subscription is not an OpenAI API subscription,
-> and you are responsible for complying with the applicable terms.
+  **A low-memory HTTP proxy providing an OpenAI-compatible API layer over ChatGPT.**
 
-## What it provides
+  [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+  [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
+  [![HTTP](https://img.shields.io/badge/HTTP-curl--cffi-24B47E?style=for-the-badge)](https://github.com/lexiforest/curl_cffi)
+  [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](#license)
+</div>
 
-- `POST /v1/chat/completions` (streaming and non-streaming text)
-- `GET /v1/models`
-- Ollama-compatible `/api/chat`, `/api/tags`, and `/api/show`
-- Netscape `cookies.txt` authentication
-- A single-request admission lock for predictable low RAM usage
-- Optional `CODEX_AUTH_API_KEY` protection
+<br />
 
-File uploads and web search are rejected in HTTP-only mode instead of silently
-falling back to a browser.
+Codex-Auth is a Python package that provides an OpenAI-compatible API proxy
+backed by a ChatGPT web session. It uses direct HTTP requests and an incremental
+SSE parser, so Chromium and Playwright are not required at runtime.
 
-## Authentication
+> ChatGPT's web endpoints are undocumented and can change without notice. A
+> ChatGPT subscription is not an OpenAI API subscription.
+
+## 📑 Table of Contents
+
+- [✨ Features](#-features)
+- [🚀 Getting Started](#-getting-started)
+- [💻 Usage](#-usage)
+- [☁️ Deploy on Render](#️-deploy-on-render)
+- [📸 Screenshots](#-screenshots)
+- [🔌 Connecting Tools](#-connecting-tools)
+- [🏗️ Architecture](#️-architecture)
+- [📜 License](#-license)
+
+## ✨ Features
+
+- 🍪 **Cookie Authentication**: Loads a Netscape-format ChatGPT `cookies.txt`.
+- 🔄 **OpenAI Compatible**: Supports `/v1/chat/completions` and `/v1/models`.
+- 🪶 **Low Memory**: No browser process, renderer, DOM, or JavaScript heap.
+- ⚡ **Streaming Core**: Reconstructs assistant text from ChatGPT SSE events.
+- 📊 **Dashboard**: Browser login protects runtime logs, usage, and model status.
+- 📦 **CLI Tool**: Includes the `codex-auth` CLI built with Typer and Rich.
+
+HTTP-only mode currently supports text conversations. File uploads and web
+search return an explicit error.
+
+## 🚀 Getting Started
+
+### Option 1: Python Developers (Recommended)
+
+```bash
+pipx install codex-auth-proxy
+codex-auth install
+```
+
+The install command confirms that no browser download is needed.
+
+### Option 2: Editable Development Install
+
+```bash
+git clone https://github.com/yutuknown/codex-auth.git
+cd codex-auth
+python -m pip install -e .
+```
+
+## 💻 Usage
+
+### 1. Authenticate
 
 Export your signed-in `chatgpt.com` cookies in Netscape HTTP Cookie File format
-and save them as:
+and save them at:
 
 ```text
 .codex/cookies.txt
 ```
 
-The file is ignored by Git. Never commit, paste into logs, or share it. The
-session cookie grants access to your ChatGPT account and will eventually
-expire.
+The `.codex` directory is ignored by Git. Never commit or share this file.
+Alternatively, set `CODEX_AUTH_COOKIE_FILE` to a different path.
 
-For a different local path, set `CODEX_AUTH_COOKIE_FILE`. For hosted services,
-set the complete file contents in the secret environment variable
-`CODEX_AUTH_COOKIES`. If the hosting provider's datacenter IP is blocked from
-the cookie-to-token exchange, also set `CODEX_AUTH_ACCESS_TOKEN` to the bearer
-token from the same authenticated browser session. That token is sensitive and
-short-lived.
-
-## Run locally
+### 2. Start the Proxy Server
 
 ```bash
-python -m pip install -e .
 codex-auth start --port 8000
 ```
 
-Test it:
+The OpenAI-compatible base URL is `http://127.0.0.1:8000/v1`.
+
+### 3. Test a Completion
 
 ```bash
 curl http://127.0.0.1:8000/v1/chat/completions \
@@ -55,45 +96,72 @@ curl http://127.0.0.1:8000/v1/chat/completions \
   -d '{"model":"gpt-5-3","messages":[{"role":"user","content":"Reply with OK"}]}'
 ```
 
-If `CODEX_AUTH_API_KEY` is set, also send
-`Authorization: Bearer <your-key>`.
+When `CODEX_AUTH_API_KEY` is configured, also send:
 
-## Deploy on Render
-
-The included `Dockerfile` contains no browser and the Blueprint uses Render's
-Free plan.
-
-1. Create a Render Blueprint or Docker web service from this repository.
-2. Set secret `CODEX_AUTH_COOKIES` to the full Netscape cookie-file contents.
-3. If startup reports HTTP 403 during session validation, also set the secret
-   `CODEX_AUTH_ACCESS_TOKEN` captured from the same browser session.
-4. Keep `CODEX_AUTH_API_KEY` enabled and private.
-5. When the ChatGPT session expires, replace the cookies and access token.
-
-The health check is `GET /healthz`. See
-[`docs/low-memory-architecture.md`](docs/low-memory-architecture.md) for the
-request algorithm and memory characteristics.
-
-## HTTP flow
-
-```mermaid
-flowchart LR
-    C[API client] --> A[FastAPI + API-key check]
-    A --> L[Single async admission lock]
-    L --> H[curl-cffi HTTP session]
-    H --> S[Chat requirements + proof]
-    S --> N[New conversation endpoint]
-    S --> P[Prepare + f/conversation continuation]
-    N --> E[SSE delta parser]
-    P --> E
-    E --> C
+```text
+Authorization: Bearer <CODEX_AUTH_API_KEY>
 ```
 
-New chats use `/backend-api/conversation`. Once ChatGPT returns a registered
-conversation ID and parent message ID, continuation turns use
-`/backend-api/f/conversation/prepare` followed by
-`/backend-api/f/conversation`.
+### 4. Open the Dashboard
 
-## License
+Visit `/login`, enter `CODEX_AUTH_API_KEY`, and the server creates a secure
+HttpOnly dashboard session. The raw key is not stored in the browser cookie.
 
-MIT. See [`LICENSE`](LICENSE).
+## ☁️ Deploy on Render
+
+The included `Dockerfile` has no browser dependencies, and `render.yaml` uses
+Render's Free plan.
+
+1. Create a Render Blueprint or Docker web service from this repository.
+2. Set `CODEX_AUTH_COOKIES` to the complete Netscape cookie-file contents.
+3. If Render cannot perform the cookie-to-token exchange, set
+   `CODEX_AUTH_ACCESS_TOKEN` from the same authenticated browser session.
+4. Generate a private `CODEX_AUTH_API_KEY`.
+5. Replace the cookies and access token when the ChatGPT session expires.
+
+The health check is `GET /healthz`. Secrets must remain in Render environment
+variables and must never be committed.
+
+See [`docs/low-memory-architecture.md`](docs/low-memory-architecture.md) for the
+request algorithm and memory characteristics.
+
+## 📸 Screenshots
+
+| Authentication Setup | API Server Logs | CLI Chat Interface |
+| :---: | :---: | :---: |
+| <img src="assets/screenshot-1.png" width="250"> | <img src="assets/screenshot-2.png" width="250"> | <img src="assets/screenshot-3.png" width="250"> |
+
+## 🔌 Connecting Tools
+
+Configure any OpenAI-compatible client with:
+
+- **Base URL**: `http://127.0.0.1:8000/v1` or your Render URL followed by `/v1`
+- **API Key**: `CODEX_AUTH_API_KEY`
+- **Model**: A slug returned by `GET /v1/models`
+
+## 🏗️ Architecture
+
+```mermaid
+graph LR
+    A[AI Tool / IDE] -->|OpenAI API Request| B(FastAPI Server)
+    B -->|Single admission lock| C{curl-cffi HTTP session}
+    C -->|New chat| D[conversation]
+    C -->|Continuation| E[f/conversation prepare + stream]
+    D --> F[SSE text parser]
+    E --> F
+    F --> A
+```
+
+- **FastAPI** handles API routing, API-key checks, and the dashboard.
+- **curl-cffi** maintains the authenticated HTTP cookie session.
+- **The SSE parser** emits assistant text without loading a browser page.
+- **Typer and Rich** power the CLI.
+
+## 🤝 Contributors
+
+- [@yutuknown](https://github.com/yutuknown) - Creator & Lead Developer
+- **Antigravity AI** - AI Pair Programmer
+
+## 📜 License
+
+Distributed under the MIT License. See `LICENSE` for more information.

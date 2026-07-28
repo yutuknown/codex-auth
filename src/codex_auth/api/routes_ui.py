@@ -1,11 +1,94 @@
+import os
+import secrets
 from pathlib import Path
+from urllib.parse import parse_qs
 
-from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ..config import auth_is_configured, get_auth_file
+from ..config import auth_is_configured, get_auth_file, get_cookie_file
 
 router = APIRouter()
+
+
+LOGIN_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Codex-Auth Dashboard Login</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+           background: #09090b; color: #fafafa; }
+    main { width: min(390px, calc(100% - 40px)); padding: 32px; border: 1px solid #27272a;
+           border-radius: 16px; background: #111113; box-shadow: 0 20px 60px #0008; }
+    img { display: block; width: 180px; max-height: 70px; margin: 0 auto 24px; }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    p { margin: 0 0 22px; color: #a1a1aa; line-height: 1.5; }
+    label { display: block; margin-bottom: 8px; font-size: 13px; color: #d4d4d8; }
+    input { box-sizing: border-box; width: 100%; padding: 12px 14px; color: #fafafa;
+            border: 1px solid #3f3f46; border-radius: 9px; background: #18181b; }
+    button { width: 100%; margin-top: 14px; padding: 12px; border: 0; border-radius: 9px;
+             background: #fafafa; color: #09090b; font-weight: 700; cursor: pointer; }
+    .error { color: #f87171; margin-bottom: 14px; }
+  </style>
+</head>
+<body><main>
+  <img src="/assets/logo-dark.svg" alt="Codex-Auth">
+  <h1>Dashboard login</h1>
+  <p>Enter the private API key configured for this deployment.</p>
+  {error}
+  <form method="post" action="/login">
+    <label for="api_key">API key</label>
+    <input id="api_key" name="api_key" type="password" required autofocus autocomplete="current-password">
+    <button type="submit">Open dashboard</button>
+  </form>
+</main></body></html>"""
+
+
+@router.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse("/login", status_code=303)
+
+
+@router.get("/login", response_class=HTMLResponse, include_in_schema=False)
+async def dashboard_login():
+    return LOGIN_PAGE.replace("{error}", "")
+
+
+@router.post("/login", response_class=HTMLResponse, include_in_schema=False)
+async def dashboard_login_submit(request: Request):
+    expected_key = os.environ.get("CODEX_AUTH_API_KEY", "")
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    supplied_key = (form.get("api_key") or [""])[0]
+    if not expected_key or not supplied_key or not secrets.compare_digest(supplied_key, expected_key):
+        return HTMLResponse(
+            LOGIN_PAGE.replace("{error}", '<p class="error">Invalid API key.</p>'),
+            status_code=401,
+        )
+
+    from . import dashboard_session_value
+
+    response = RedirectResponse("/dashboard", status_code=303)
+    response.set_cookie(
+        "codex_auth_dashboard",
+        dashboard_session_value(expected_key),
+        max_age=30 * 24 * 60 * 60,
+        httponly=True,
+        secure=request.url.scheme == "https" or bool(os.environ.get("RENDER")),
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@router.get("/logout", include_in_schema=False)
+async def dashboard_logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie("codex_auth_dashboard", path="/")
+    return response
+
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
@@ -63,8 +146,16 @@ async def get_usage():
 @router.get("/api/status")
 async def get_status():
     auth_file = get_auth_file()
+    cookie_file = get_cookie_file()
     is_authenticated = auth_is_configured()
-    auth_source = "CODEX_AUTH_JSON" if is_authenticated and not auth_file.exists() else str(auth_file.absolute())
+    if os.environ.get("CODEX_AUTH_COOKIES"):
+        auth_source = "CODEX_AUTH_COOKIES"
+    elif cookie_file.exists():
+        auth_source = str(cookie_file.absolute())
+    elif os.environ.get("CODEX_AUTH_JSON"):
+        auth_source = "CODEX_AUTH_JSON"
+    else:
+        auth_source = str(auth_file.absolute())
     return {
         "status": "Active" if is_authenticated else "Missing Authentication",
         "auth_file_path": auth_source if is_authenticated else None,

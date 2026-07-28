@@ -4,10 +4,9 @@ from typing import Any, AsyncGenerator, Dict
 
 class BaseProvider(ABC):
     @abstractmethod
-    async def initialize(self, engine) -> None:
+    async def initialize(self) -> None:
         """
-        Initialize the provider by creating a browser context from the engine,
-        injecting authentication cookies/headers, and navigating to the necessary URL.
+        Initialize the provider and validate its authenticated HTTP session.
         """
         pass
 
@@ -27,16 +26,11 @@ class BaseProvider(ABC):
         pass
 
     @abstractmethod
-    async def get_context(self):
-        """
-        Return the Playwright BrowserContext associated with this provider,
-        so that routes can make direct HTTP proxy requests if needed.
-        """
-        pass
-
-    @abstractmethod
     async def reset_session(self, model: str):
         """
         Reset the chat session or navigate to a new context.
         """
         pass
+
+    async def close(self) -> None:
+        """Release provider resources."""

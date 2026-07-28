@@ -26,7 +26,7 @@ from .usage import format_tokens, load_usage
 
 # Enable rich markup mode for beautiful help text formatting
 app = typer.Typer(
-    help="[bold cyan]Codex-Auth[/bold cyan]: A professional Stealth API Proxy for ChatGPT.",
+    help="[bold cyan]Codex-Auth[/bold cyan]: A low-memory HTTP API proxy for ChatGPT.",
     rich_markup_mode="rich",
     add_completion=False,
 )
@@ -79,10 +79,10 @@ def start(
     # Quick sanity check for auth token
     if not auth_is_configured():
         console.print("\n[bold red]●[/bold red] [bold]Authentication Missing[/bold]")
-        console.print("  [dim]Error:[/dim]  Could not find valid Codex authentication.")
+        console.print("  [dim]Error:[/dim]  Could not find ChatGPT cookies.")
         console.print(
-            "  [dim]Action:[/dim] Run [bold]codex-auth auth[/bold], or configure "
-            "[bold]CODEX_AUTH_JSON[/bold] for a hosted service.\n"
+            "  [dim]Action:[/dim] Save a Netscape export to [bold].codex/cookies.txt[/bold], "
+            "or configure [bold]CODEX_AUTH_COOKIES[/bold] for a hosted service.\n"
         )
         raise typer.Exit(code=1)
 
@@ -137,22 +137,10 @@ def auth():
 @app.command()
 def install():
     """
-    Install the required headless browser (Chromium) for Codex-Auth.
-    This is required after installing via pipx.
+    Confirm that no browser installation is required.
     """
-    console.print("\n[bold cyan]●[/bold cyan] [bold]Installing Chromium Browser[/bold]")
-    console.print("  [dim]This may take a minute as Playwright downloads the browser engine...[/dim]\n")
-    
-    import subprocess
-    try:
-        # Run playwright install chromium
-        subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
-        console.print("\n[bold green]✔[/bold green] [bold]Browser Installed Successfully![/bold]")
-        console.print("  [dim]You can now run [bold]codex-auth auth[/bold] to login.[/dim]\n")
-    except subprocess.CalledProcessError:
-        console.print("\n[bold red]✖[/bold red] [bold]Browser Installation Failed[/bold]")
-        console.print("  [dim]Action:[/dim] Try running `playwright install chromium` manually.\n")
-        raise typer.Exit(code=1)
+    console.print("\n[bold green]Ready.[/bold green] HTTP-only mode does not install Chromium or Playwright.")
+    console.print("Save your Netscape cookie export to [bold].codex/cookies.txt[/bold].\n")
 
 
 @app.command()

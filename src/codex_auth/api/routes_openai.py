@@ -5,11 +5,10 @@ from typing import Any, Dict, List, Union
 
 import tiktoken
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..core.browser import AccountBlockedError, CaptchaDetectedError, StealthTimeoutError
-from ..providers.openai.provider import provider
+from ..providers.openai.provider import ChatGPTSessionError, provider
 from ..usage import record_usage
 
 router = APIRouter()
@@ -51,22 +50,18 @@ async def proxy_backend_api(path: str, request: Request):
     logger.info(f"Proxying request to [cyan]{url}[/cyan]")
     
     try:
-        context = await provider.get_context()
-        if request.method == "GET":
-            response = await context.request.get(url)
-        elif request.method == "POST":
-            try:
-                body = await request.json()
-                response = await context.request.post(url, data=body)
-            except:
-                response = await context.request.post(url)
-        elif request.method == "OPTIONS":
+        if request.method == "OPTIONS":
             return {}
-            
-        if response.ok:
-            return await response.json()
-        else:
-            raise HTTPException(status_code=response.status, detail=await response.text())
+        try:
+            body = await request.json() if request.method == "POST" else None
+        except Exception:
+            body = None
+        status, content_type, content = await provider.proxy_request(request.method, path, body)
+        if "application/json" in content_type:
+            return JSONResponse(status_code=status, content=json.loads(content))
+        return Response(status_code=status, content=content, media_type=content_type or None)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -191,14 +186,8 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                 except Exception as e:
                     logger.error(f"[API] Failed to record usage: {e}")
                     
-            except CaptchaDetectedError:
-                err = {"error": {"message": "Cloudflare CAPTCHA detected. Proxy blocked.", "type": "captcha_error", "code": 403}}
-                yield f"data: {json.dumps(err)}\n\n"
-            except AccountBlockedError:
-                err = {"error": {"message": "OpenAI account deactivated or blocked.", "type": "account_blocked", "code": 403}}
-                yield f"data: {json.dumps(err)}\n\n"
-            except StealthTimeoutError as e:
-                err = {"error": {"message": str(e), "type": "timeout", "code": 504}}
+            except ChatGPTSessionError as e:
+                err = {"error": {"message": str(e), "type": "upstream_error", "code": 502}}
                 yield f"data: {json.dumps(err)}\n\n"
             except Exception as e:
                 err = {"error": {"message": str(e), "type": "internal_error", "code": 500}}
@@ -261,11 +250,7 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                     }
                 }
             }
-        except CaptchaDetectedError as e:
-            raise HTTPException(status_code=403, detail={"message": str(e), "type": "captcha_error"})
-        except AccountBlockedError as e:
-            raise HTTPException(status_code=403, detail={"message": str(e), "type": "account_blocked"})
-        except StealthTimeoutError as e:
-            raise HTTPException(status_code=504, detail={"message": str(e), "type": "timeout"})
+        except ChatGPTSessionError as e:
+            raise HTTPException(status_code=502, detail={"message": str(e), "type": "upstream_error"})
         except Exception as e:
             raise HTTPException(status_code=500, detail={"message": str(e), "type": "internal_error"})

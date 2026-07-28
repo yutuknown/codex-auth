@@ -1,130 +1,94 @@
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo.svg">
-    <img alt="Codex-Auth Logo" src="assets/logo.svg" width="300">
-  </picture>
-  
-  # Codex-Auth
-  
-  **A Stealth Playwright proxy providing an OpenAI-compatible API layer over ChatGPT.**
-  
-  [![Python](https://img.shields.io/badge/Python-3.13+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-  [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
-  [![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev/)
-  [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](#license)
-</div>
+# Codex-Auth
 
-<br />
+Codex-Auth exposes an OpenAI-compatible API backed by an authenticated
+ChatGPT web session. It talks to ChatGPT over HTTP with `curl-cffi`; Chromium
+and Playwright are not used at runtime.
 
-Codex-Auth is a Python package that provides an OpenAI-compatible API proxy backed by a ChatGPT web session. By utilizing Stealth Playwright, it exposes a local API layer that can be connected to AI tools and IDEs like Cursor and OpenRouter.
+> This project calls undocumented ChatGPT web endpoints. They can change
+> without notice. A ChatGPT subscription is not an OpenAI API subscription,
+> and you are responsible for complying with the applicable terms.
 
-## 📑 Table of Contents
-- [✨ Features](#-features)
-- [🚀 Getting Started](#-getting-started)
-- [💻 Usage](#-usage)
-- [📸 Screenshots](#-screenshots)
-- [🔌 Connecting Tools](#-connecting-tools)
-- [🏗️ Architecture](#️-architecture)
-- [📜 License](#-license)
+## What it provides
 
-## ✨ Features
+- `POST /v1/chat/completions` (streaming and non-streaming text)
+- `GET /v1/models`
+- Ollama-compatible `/api/chat`, `/api/tags`, and `/api/show`
+- Netscape `cookies.txt` authentication
+- A single-request admission lock for predictable low RAM usage
+- Optional `CODEX_AUTH_API_KEY` protection
 
-- 🎭 **Stealth Automation**: Uses `playwright-stealth` to navigate automated bot detection.
-- 🔄 **OpenAI Compatible**: Supports OpenAI's `/v1/chat/completions` and `/v1/models` endpoints.
-- 🖼️ **Vision & Multimodal**: Scrapes internal endpoints to report model vision capabilities.
-- ⚡ **Asynchronous Core**: Built on FastAPI for non-blocking request handling.
-- 📦 **CLI Tool**: Includes the `codex-auth` CLI built with Typer & Rich for setup and execution.
+File uploads and web search are rejected in HTTP-only mode instead of silently
+falling back to a browser.
 
-## 🚀 Getting Started
+## Authentication
 
-### Option 1: Python Developers (Recommended)
-If you have Python installed, use `pipx` to install Codex-Auth globally in an isolated environment. This prevents dependency conflicts with your other Python packages.
+Export your signed-in `chatgpt.com` cookies in Netscape HTTP Cookie File format
+and save them as:
 
-```bash
-pipx install codex-auth-proxy
-codex-auth install
+```text
+.codex/cookies.txt
 ```
 
-### Option 2: Standalone Binary (Windows)
-If you don't have Python installed, or just want a frictionless setup, download the compiled `.exe`:
+The file is ignored by Git. Never commit, paste into logs, or share it. The
+session cookie grants access to your ChatGPT account and will eventually
+expire.
 
-1. Go to the [Releases page](https://github.com/yutuknown/codex-auth/releases)
-2. Download `codex-auth.exe`
-3. Open your terminal and run it directly to install the bundled browser:
-```bash
-codex-auth.exe install
-```
+For a different local path, set `CODEX_AUTH_COOKIE_FILE`. For hosted services,
+set the complete file contents in the secret environment variable
+`CODEX_AUTH_COOKIES`.
 
-## 💻 Usage
-
-Codex-Auth provides a command-line interface for managing the proxy.
-
-### 1. Authenticate
-
-Before running the proxy server, you need to capture a valid ChatGPT session token. 
+## Run locally
 
 ```bash
-codex-auth auth
-```
-*This command launches a headless browser. Follow the prompts to log in to your account. Session tokens are saved to the local `.codex` directory.*
-
-### 2. Start the Proxy Server
-
-Once authenticated, start the API server:
-
-```bash
+python -m pip install -e .
 codex-auth start --port 8000
 ```
-*The proxy will listen on `http://127.0.0.1:8000`.*
+
+Test it:
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5-3","messages":[{"role":"user","content":"Reply with OK"}]}'
+```
+
+If `CODEX_AUTH_API_KEY` is set, also send
+`Authorization: Bearer <your-key>`.
 
 ## Deploy on Render
 
-The repository includes a `Dockerfile` and `render.yaml` for a Render Blueprint deployment. The Blueprint uses a paid Standard web service with 2 GB RAM because Chromium is not a good fit for Render's 512 MB Free or Starter instances.
+The included `Dockerfile` contains no browser and the Blueprint uses Render's
+Free plan.
 
-1. Run `codex-auth auth` locally and locate the generated `.codex/auth.json`.
-2. Create a new Render Blueprint from this repository.
-3. When Render requests `CODEX_AUTH_JSON`, paste the complete contents of `auth.json`. Never commit this value.
-4. Render generates `CODEX_AUTH_API_KEY`. Use that value for API and dashboard requests:
+1. Create a Render Blueprint or Docker web service from this repository.
+2. Set secret `CODEX_AUTH_COOKIES` to the full Netscape cookie-file contents.
+3. Keep `CODEX_AUTH_API_KEY` enabled and private.
+4. When the ChatGPT session expires, replace `CODEX_AUTH_COOKIES` and redeploy.
 
-```text
-Authorization: Bearer <CODEX_AUTH_API_KEY>
-```
+The health check is `GET /healthz`. See
+[`docs/low-memory-architecture.md`](docs/low-memory-architecture.md) for the
+request algorithm and memory characteristics.
 
-The container binds to `0.0.0.0` on Render's `PORT`, installs Chromium and its Linux dependencies, and exposes `/healthz` for Render health checks. You can alternatively provide an auth file with `CODEX_AUTH_FILE`; Render Docker secret files are available under `/etc/secrets/`.
-
-## 📸 Screenshots
-
-| Authentication Setup | API Server Logs | CLI Chat Interface |
-| :---: | :---: | :---: |
-| <img src="assets/screenshot-1.png" width="250"> | <img src="assets/screenshot-2.png" width="250"> | <img src="assets/screenshot-3.png" width="250"> |
-
-## 🔌 Connecting Tools
-
-You can configure Codex-Auth as a custom OpenAI provider in standard AI tools.
-
-Example configuration:
-- **Base URL**: `http://127.0.0.1:8000/v1`
-- **API Key**: `sk-codex-dummy` *(The proxy accepts any string)*
-
-The proxy intercepts API requests and routes them through the authenticated ChatGPT web session.
-
-## 🏗️ Architecture
+## HTTP flow
 
 ```mermaid
-graph LR
-    A[AI Tool / IDE] -->|OpenAI API Request| B(FastAPI Server)
-    B -->|Async Automation| C{Playwright Stealth}
-    C -->|Web Session| D[(ChatGPT)]
+flowchart LR
+    C[API client] --> A[FastAPI + API-key check]
+    A --> L[Single async admission lock]
+    L --> H[curl-cffi HTTP session]
+    H --> S[Chat requirements + proof]
+    S --> N[New conversation endpoint]
+    S --> P[Prepare + f/conversation continuation]
+    N --> E[SSE delta parser]
+    P --> E
+    E --> C
 ```
 
-- **FastAPI**: Handles API routing.
-- **Playwright**: Drives the browser interaction.
-- **Typer & Rich**: Powers the CLI interface.
+New chats use `/backend-api/conversation`. Once ChatGPT returns a registered
+conversation ID and parent message ID, continuation turns use
+`/backend-api/f/conversation/prepare` followed by
+`/backend-api/f/conversation`.
 
-## 🤝 Contributors
-- [@yutuknown](https://github.com/yutuknown) - Creator & Lead Developer
-- **Antigravity AI** - AI Pair Programmer
+## License
 
-## 📜 License
-Distributed under the MIT License. See `LICENSE` for more information.
+MIT. See [`LICENSE`](LICENSE).

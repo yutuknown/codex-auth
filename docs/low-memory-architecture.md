@@ -1,7 +1,7 @@
 # Low-memory architecture
 
-The Render Free runtime provides approximately 512 MB of RAM. Codex-Auth uses
-the following constrained pipeline when `CODEX_AUTH_LOW_MEMORY=true`:
+The runtime does not launch Chromium. One `curl-cffi` session holds the cookie
+jar and reuses network connections.
 
 ```text
 HTTP request
@@ -13,12 +13,14 @@ API-key middleware
 Single asyncio admission lock
     |
     v
-One Chromium process / one renderer / one page
+Worker thread (one active upstream request)
     |
-    +--> Abort images, fonts, media, stylesheets, service workers, and telemetry
+    +--> session validation / access-token exchange
+    +--> Sentinel requirements and local proof-of-work
+    +--> conversation creation or continuation preparation
     |
     v
-DOM text-delta extractor
+Incremental SSE parser
     |
     v
 OpenAI-compatible response
@@ -26,15 +28,28 @@ OpenAI-compatible response
 
 ## Algorithm
 
-1. Authenticate the request before it enters the browser queue.
-2. Admit only one generation at a time with the engine lock.
-3. Reuse one browser context and page to avoid duplicate Chromium processes.
-4. Limit Chromium to one renderer and a 128 MB JavaScript heap.
-5. Abort resources that do not contribute to prompt submission or text output.
-6. Extract only the newest assistant message and yield text deltas.
-7. Return API responses with `Cache-Control: no-store`.
-8. Let Render restart the single instance if Chromium still exceeds the hard
-   container memory limit.
+1. Reject unauthenticated proxy requests before upstream work.
+2. Admit one generation at a time so concurrent callers cannot duplicate the
+   mutable ChatGPT conversation state.
+3. Reuse one TLS session and one in-memory cookie jar.
+4. Compute Sentinel proof locally with a bounded loop.
+5. Use the regular conversation endpoint to create a registered conversation.
+6. Store only the returned conversation ID and latest message ID.
+7. For a continuation, call `f/conversation/prepare`, then stream from
+   `f/conversation` with its conduit token.
+8. Reconstruct only assistant text from initial SSE messages and patch events.
+9. Put chunks onto an async queue so the synchronous TLS client does not block
+   the FastAPI event loop.
+10. Return `Cache-Control: no-store` and retain no prompt history in the proxy.
 
-This mode trades throughput and some UI resilience for lower peak memory. A
-2 GB Render Standard instance remains the recommended production target.
+Memory usage is bounded by the Python process, cookie/model metadata, the SSE
+response buffer maintained by the HTTP library, and short response strings.
+There is no browser renderer, JavaScript heap, page DOM, or browser cache.
+
+## Trade-offs
+
+- Throughput is intentionally one generation per instance.
+- The conversation state is in memory and resets after a restart.
+- File upload and web search are not implemented in HTTP-only mode.
+- ChatGPT's internal protocol and Sentinel format are undocumented and may
+  require updates when the web client changes.

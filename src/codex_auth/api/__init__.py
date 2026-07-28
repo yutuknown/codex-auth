@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from rich.logging import RichHandler
 
-from ..core.browser import engine
 from ..providers.openai.provider import provider
 
 # Store the last 500 logs in memory for the UI dashboard
@@ -65,11 +64,11 @@ async def app_lifespan(app: FastAPI):
     if open_dashboard not in {"0", "false", "no"}:
         threading.Thread(target=auto_open_dashboard, daemon=True).start()
     
-    # Delegate the heavy Playwright initialization to the generic engine
-    async with engine.lifespan():
-        # Initialize the configured provider
-        await provider.initialize(engine)
+    await provider.initialize()
+    try:
         yield
+    finally:
+        await provider.close()
 
 from fastapi import Request
 

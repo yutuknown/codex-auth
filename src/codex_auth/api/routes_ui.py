@@ -209,6 +209,7 @@ async def get_models_list():
             detail={"message": str(exc), "type": "upstream_error"},
         ) from exc
     models_out = []
+    proxy_capabilities = provider.runtime_status()["proxy_capabilities"]
     
     for m in real_models:
         slug = m.get("slug", "auto")
@@ -233,14 +234,7 @@ async def get_models_list():
                 "image_generation": "image_gen_tool_enabled" in enabled_tools,
             },
             "proxy_capabilities": {
-                "text": True,
-                "streaming": True,
-                "image_input": True,
-                "file_uploads": True,
-                "web_search": True,
-                "function_tools": False,
-                "canvas": False,
-                "image_generation": False,
+                **proxy_capabilities,
             },
         })
         

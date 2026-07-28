@@ -912,6 +912,7 @@ class OpenAIProvider(BaseProvider):
 
     def runtime_status(self) -> dict[str, Any]:
         token_expiry = self._jwt_claims(self.access_token).get("exp")
+        attachment_uploads_available = bool(self.access_token) and self.auth_mode != "cookie_only"
         session_cookie = next(
             (cookie for cookie in self.cookie_metadata if cookie["name"] == "__Secure-next-auth.session-token"),
             {},
@@ -945,9 +946,9 @@ class OpenAIProvider(BaseProvider):
                 "realtime_text_streaming": False,
                 "canonical_buffered_streaming": True,
                 "ollama_compatibility": True,
-                "file_uploads": True,
+                "file_uploads": attachment_uploads_available,
                 "web_search": True,
-                "image_input": True,
+                "image_input": attachment_uploads_available,
                 "function_tools": False,
                 "canvas": False,
                 "image_generation": False,

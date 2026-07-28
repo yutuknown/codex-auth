@@ -137,9 +137,9 @@ def test_expiry_details_reports_remaining_lifetime(monkeypatch):
     assert details["expires_at"] == "1970-01-01T00:18:40+00:00"
 
 
-def test_runtime_status_distinguishes_proxy_from_upstream_capabilities():
+def test_runtime_status_only_advertises_uploads_with_bearer_authentication():
     provider = OpenAIProvider()
-    provider.access_token = ""
+    provider.access_token = "bearer-token"
     provider.device_id = ""
 
     status = provider.runtime_status()
@@ -151,6 +151,12 @@ def test_runtime_status_distinguishes_proxy_from_upstream_capabilities():
     assert status["proxy_capabilities"]["image_input"] is True
     assert status["proxy_capabilities"]["file_uploads"] is True
     assert status["proxy_capabilities"]["web_search"] is True
+
+    provider.auth_mode = "cookie_only"
+    cookie_status = provider.runtime_status()
+    assert cookie_status["proxy_capabilities"]["image_input"] is False
+    assert cookie_status["proxy_capabilities"]["file_uploads"] is False
+    assert cookie_status["proxy_capabilities"]["web_search"] is True
 
 
 def test_decode_data_url_and_build_multimodal_message():

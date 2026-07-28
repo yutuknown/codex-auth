@@ -38,7 +38,9 @@ OpenAI-compatible response
    has mutable Sentinel and conversation state.
 5. Reuse one TLS session and one in-memory cookie jar.
 6. On an authenticated upstream 401, exchange the existing cookie session for
-   a fresh access token and retry that request once.
+   a genuinely new access token and retry once. If the exchange is blocked or
+   returns the same rejected token, retry without the bearer and let the
+   authenticated cookie session authorize the backend request.
 7. Compute Sentinel proof locally with a bounded loop.
 8. Upload image/document bytes directly to the authenticated ChatGPT file
    service when attachments are present.

@@ -261,7 +261,6 @@ class OpenAIProvider(BaseProvider):
 
     def _headers(self, target: str, *, accept: str = "*/*") -> dict[str, str]:
         headers = {
-            "Authorization": f"Bearer {self.access_token}",
             "accept": accept,
             "content-type": "application/json",
             "oai-device-id": self.device_id,
@@ -271,6 +270,8 @@ class OpenAIProvider(BaseProvider):
             "origin": BASE_URL,
             "referer": BASE_URL + (f"/c/{self.conversation_id}" if self.conversation_id else "/"),
         }
+        if self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
         if target == "/backend-api/f/conversation":
             headers.update(
                 {
@@ -289,7 +290,7 @@ class OpenAIProvider(BaseProvider):
         if response.status_code != 200:
             return False
         access_token = (response.json() or {}).get("accessToken", "")
-        if not access_token:
+        if not access_token or access_token == self.access_token:
             return False
         self.access_token = access_token
         self.auth_mode = "cookie_refresh"
@@ -319,16 +320,29 @@ class OpenAIProvider(BaseProvider):
             return response
         with self.token_refresh_lock:
             refreshed = self.access_token != token_used or self._refresh_access_token_sync()
-        if not refreshed:
-            return response
+        if refreshed:
+            response.close()
+            request_headers["Authorization"] = f"Bearer {self.access_token}"
+            response = self.session.request(
+                method,
+                BASE_URL + target,
+                headers=request_headers,
+                **kwargs,
+            )
+            if response.status_code != 401:
+                return response
         response.close()
-        request_headers["Authorization"] = f"Bearer {self.access_token}"
-        return self.session.request(
+        cookie_headers = dict(request_headers)
+        cookie_headers.pop("Authorization", None)
+        response = self.session.request(
             method,
             BASE_URL + target,
-            headers=request_headers,
+            headers=cookie_headers,
             **kwargs,
         )
+        if response.status_code != 401:
+            self.auth_mode = "cookie_only"
+        return response
 
     def _initialize_sync(self) -> None:
         self.session = Session(impersonate="chrome")
@@ -344,15 +358,13 @@ class OpenAIProvider(BaseProvider):
         self.auth_mode = "hosted_bearer" if self.access_token else "cookie_exchange"
         if not self.access_token:
             response = self.session.get(BASE_URL + "/api/auth/session", timeout=30)
-            if response.status_code != 200:
-                raise ChatGPTSessionError(
-                    f"ChatGPT session validation failed with HTTP {response.status_code}; "
-                    "refresh cookies.txt or set CODEX_AUTH_ACCESS_TOKEN for hosted deployments"
-                )
-            self.access_token = (response.json() or {}).get("accessToken", "")
+            if response.status_code == 200:
+                self.access_token = (response.json() or {}).get("accessToken", "")
+            if not self.access_token:
+                self.auth_mode = "cookie_only"
         self.device_id = self.session.cookies.get("oai-did") or ""
-        if not self.access_token or not self.device_id:
-            raise ChatGPTSessionError("ChatGPT session did not provide an access token and oai-did cookie")
+        if not self.device_id:
+            raise ChatGPTSessionError("ChatGPT session did not provide an oai-did cookie")
         self.initialized_at = time.time()
 
     async def initialize(self) -> None:
@@ -915,7 +927,11 @@ class OpenAIProvider(BaseProvider):
             "max_attachments": MAX_ATTACHMENTS,
             "max_upload_bytes": MAX_UPLOAD_BYTES,
             "auth_mode": self.auth_mode,
-            "initialized": bool(self.session and self.access_token and self.device_id),
+            "initialized": bool(
+                self.session
+                and self.device_id
+                and (self.access_token or self.auth_mode == "cookie_only")
+            ),
             "uptime_seconds": int(time.time() - self.initialized_at),
             "selected_model": self.model,
             "conversation_active": bool(self.conversation_id),

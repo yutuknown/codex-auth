@@ -3,7 +3,7 @@ import secrets
 from pathlib import Path
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..config import auth_is_configured, get_auth_file, get_cookie_file
@@ -184,17 +184,30 @@ async def get_status():
 
 @router.get("/api/account")
 async def get_account():
-    from ..providers.openai.provider import provider
+    from ..providers.openai.provider import ChatGPTSessionError, provider
 
-    return await provider.fetch_account_details()
+    try:
+        return await provider.fetch_account_details()
+    except ChatGPTSessionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"message": str(exc), "type": "upstream_error"},
+        ) from exc
 
 
 @router.get("/api/models_list")
 async def get_models_list():
 
+    from ..providers.openai.provider import ChatGPTSessionError
     from .routes_openai import provider
     
-    real_models = await provider.fetch_models()
+    try:
+        real_models = await provider.fetch_models()
+    except ChatGPTSessionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"message": str(exc), "type": "upstream_error"},
+        ) from exc
     models_out = []
     
     for m in real_models:

@@ -125,7 +125,13 @@ def _trace_data(
 
 @router.get("/v1/models")
 async def openai_models():
-    real_models = await provider.fetch_models()
+    try:
+        real_models = await provider.fetch_models()
+    except ChatGPTSessionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"message": str(exc), "type": "upstream_error"},
+        ) from exc
     models_data = []
     for m in real_models:
         slug = m.get("slug", "auto")
@@ -160,8 +166,10 @@ async def proxy_backend_api(path: str, request: Request):
         return Response(status_code=status, content=content, media_type=content_type or None)
     except HTTPException:
         raise
+    except ChatGPTSessionError as e:
+        raise HTTPException(status_code=502, detail={"message": str(e), "type": "upstream_error"}) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.post("/v1/chat/completions")
 async def openai_chat_completions(req: ChatCompletionRequest):

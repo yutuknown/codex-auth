@@ -96,6 +96,37 @@ def test_initialize_uses_hosted_access_token_without_session_exchange(monkeypatc
     assert provider.auth_mode == "hosted_bearer"
 
 
+def test_initialize_can_use_cookie_only_when_token_exchange_is_blocked(monkeypatch):
+    class FakeCookies:
+        def set(self, *args, **kwargs):
+            pass
+
+        def get(self, name):
+            return "device" if name == "oai-did" else None
+
+    class FakeResponse:
+        status_code = 403
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            self.cookies = FakeCookies()
+
+        def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setenv("CODEX_AUTH_COOKIES", ".chatgpt.com\tTRUE\t/\tTRUE\t0\toai-did\tdevice")
+    monkeypatch.delenv("CODEX_AUTH_ACCESS_TOKEN", raising=False)
+    monkeypatch.setattr("codex_auth.providers.openai.provider.Session", FakeSession)
+
+    provider = OpenAIProvider()
+    provider._initialize_sync()
+
+    assert provider.access_token == ""
+    assert provider.device_id == "device"
+    assert provider.auth_mode == "cookie_only"
+    assert provider.runtime_status()["initialized"] is True
+
+
 def test_expiry_details_reports_remaining_lifetime(monkeypatch):
     monkeypatch.setattr("codex_auth.providers.openai.provider.time.time", lambda: 1_000)
 
@@ -216,3 +247,38 @@ def test_authenticated_request_refreshes_cookie_token_once_after_401():
         "Bearer expired-token",
         "Bearer refreshed-token",
     ]
+
+
+def test_authenticated_request_falls_back_to_cookie_only_when_refresh_is_stale():
+    class FakeResponse:
+        def __init__(self, status_code, body=None):
+            self.status_code = status_code
+            self._body = body or {}
+
+        def json(self):
+            return self._body
+
+        def close(self):
+            pass
+
+    class FakeSession:
+        def __init__(self):
+            self.authorization_headers = []
+
+        def request(self, method, url, headers, **kwargs):
+            self.authorization_headers.append(headers.get("Authorization"))
+            return FakeResponse(401 if len(self.authorization_headers) == 1 else 200)
+
+        def get(self, url, timeout):
+            return FakeResponse(200, {"accessToken": "stale-token"})
+
+    provider = OpenAIProvider()
+    provider.session = FakeSession()
+    provider.access_token = "stale-token"
+    provider.device_id = "device"
+
+    response = provider._authenticated_request("GET", "/backend-api/models")
+
+    assert response.status_code == 200
+    assert provider.auth_mode == "cookie_only"
+    assert provider.session.authorization_headers == ["Bearer stale-token", None]

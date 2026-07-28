@@ -42,11 +42,13 @@ SSE parser, so Chromium and Playwright are not required at runtime.
 - 🪶 **Low Memory**: No browser process, renderer, DOM, or JavaScript heap.
 - ⚡ **Streaming Core**: Reconstructs assistant text from ChatGPT SSE events.
 - 📊 **Dashboard**: Browser login protects runtime logs, usage, and model status.
+- 🔐 **Session Refresh**: Validates and activates pasted or uploaded `cookies.txt`
+  exports without restarting the service.
 - 📦 **CLI Tool**: Includes the `codex-auth` CLI built with Typer and Rich.
 
-HTTP-only mode supports text, streaming, image/file attachments, and explicit
-web search without launching Chromium. Uploads accept data URLs, raw base64,
-or public HTTP(S) URLs up to 20 MB. Generic function tools, Canvas, and
+HTTP-only mode supports text and canonical streaming without launching
+Chromium. Attachment and web-search availability depends on the authenticated
+ChatGPT account and upstream permissions. Generic function tools, Canvas, and
 image-generation responses are not yet exposed by the proxy.
 
 ## 🚀 Getting Started
@@ -109,6 +111,11 @@ Authorization: Bearer <CODEX_AUTH_API_KEY>
 Visit `/login`, enter `CODEX_AUTH_API_KEY`, and the server creates a secure
 HttpOnly dashboard session. The raw key is not stored in the browser cookie.
 
+The Account page can replace an expired session by pasting a Netscape cookie
+export or selecting `cookies.txt`. The server validates the replacement against
+the account endpoints before atomically activating it. Cookie values are not
+returned by the API or included in request traces.
+
 ## ☁️ Deploy on Render
 
 The included `Dockerfile` has no browser dependencies, and `render.yaml` uses
@@ -123,6 +130,11 @@ Render's Free plan.
 
 The health check is `GET /healthz`. Secrets must remain in Render environment
 variables and must never be committed.
+
+Dashboard cookie replacement takes effect immediately and writes the configured
+cookie file. Render's default filesystem is ephemeral, so also update the
+`CODEX_AUTH_COOKIES` environment secret—or attach a persistent disk—if the new
+cookies must survive a restart or redeploy.
 
 See [`docs/low-memory-architecture.md`](docs/low-memory-architecture.md) for the
 request algorithm and memory characteristics.

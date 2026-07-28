@@ -1,5 +1,7 @@
+import contextlib
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -42,6 +44,35 @@ def load_cookie_text() -> str:
             "Export ChatGPT cookies in Netscape format or set CODEX_AUTH_COOKIES."
         )
     return cookie_file.read_text(encoding="utf-8")
+
+
+def save_cookie_text(text: str) -> Path:
+    """Atomically save Netscape cookies with owner-only file permissions where supported."""
+    cookie_file = get_cookie_file()
+    cookie_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=cookie_file.parent,
+            prefix=f".{cookie_file.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(text)
+            if not text.endswith("\n"):
+                handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary_path = Path(handle.name)
+        with contextlib.suppress(OSError):
+            os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, cookie_file)
+    finally:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink()
+    return cookie_file
 
 
 def load_auth_data() -> Dict[str, Any]:

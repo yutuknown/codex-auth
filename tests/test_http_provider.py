@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from codex_auth.providers.openai.provider import (
@@ -125,6 +127,104 @@ def test_initialize_can_use_cookie_only_when_token_exchange_is_blocked(monkeypat
     assert provider.device_id == "device"
     assert provider.auth_mode == "cookie_only"
     assert provider.runtime_status()["initialized"] is True
+
+
+def test_cookie_replacement_validation_does_not_trust_hosted_bearer(monkeypatch):
+    class FakeCookies:
+        def set(self, *args, **kwargs):
+            pass
+
+        def get(self, name):
+            return "replacement-device" if name == "oai-did" else None
+
+    class FakeResponse:
+        status_code = 403
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            self.cookies = FakeCookies()
+            self.exchange_attempted = False
+
+        def get(self, *args, **kwargs):
+            self.exchange_attempted = True
+            return FakeResponse()
+
+    monkeypatch.setenv("CODEX_AUTH_ACCESS_TOKEN", "unrelated-hosted-token")
+    monkeypatch.setattr("codex_auth.providers.openai.provider.Session", FakeSession)
+    provider = OpenAIProvider()
+
+    provider._initialize_from_cookie_text_sync(
+        ".chatgpt.com\tTRUE\t/\tTRUE\t0\toai-did\treplacement-device",
+        include_hosted_access_token=False,
+    )
+
+    assert provider.session.exchange_attempted is True
+    assert provider.access_token == ""
+    assert provider.device_id == "replacement-device"
+    assert provider.auth_mode == "cookie_only"
+
+
+def test_replace_cookies_swaps_validated_session_and_clears_cached_context(monkeypatch):
+    class FakeSession:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Candidate:
+        def __init__(self):
+            self.session = FakeSession()
+            self.access_token = "fresh-token"
+            self.device_id = "fresh-device"
+            self.auth_mode = "cookie_refresh"
+            self.cookie_metadata = [{"name": "oai-did"}]
+            self.initialized_at = 123.0
+            self.include_hosted_access_token = None
+
+        def _initialize_from_cookie_text_sync(
+            self,
+            text,
+            *,
+            include_hosted_access_token=True,
+        ):
+            assert text == "fresh-cookie-text"
+            self.include_hosted_access_token = include_hosted_access_token
+
+        def _fetch_account_details_sync(self):
+            return {"profile": {"id": "fresh-user"}}
+
+        async def close(self):
+            if self.session:
+                self.session.close()
+
+    current = OpenAIProvider()
+    old_session = FakeSession()
+    current.session = old_session
+    current.conversation_id = "stale-conversation"
+    current.parent_message_id = "stale-parent"
+    current._account_cache = {"stale": True}
+    current._models_cache = [{"stale": True}]
+    candidate = Candidate()
+    new_session = candidate.session
+    monkeypatch.setattr(
+        "codex_auth.providers.openai.provider.OpenAIProvider",
+        lambda: candidate,
+    )
+
+    details = asyncio.run(current.replace_cookies("fresh-cookie-text"))
+
+    assert details["profile"]["id"] == "fresh-user"
+    assert candidate.include_hosted_access_token is False
+    assert current.session is new_session
+    assert candidate.session is None
+    assert old_session.closed is True
+    assert current.access_token == "fresh-token"
+    assert current.device_id == "fresh-device"
+    assert current.conversation_id is None
+    assert current.parent_message_id is None
+    assert current._account_cache is None
+    assert current._models_cache is None
 
 
 def test_expiry_details_reports_remaining_lifetime(monkeypatch):

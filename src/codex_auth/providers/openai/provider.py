@@ -229,6 +229,7 @@ class OpenAIProvider(BaseProvider):
         self.conversation_id: str | None = None
         self.parent_message_id: str | None = None
         self.lock = asyncio.Lock()
+        self.credential_update_lock = asyncio.Lock()
         self.admission = asyncio.Semaphore(MAX_ADMITTED_GENERATIONS)
         self.metadata_lock = asyncio.Lock()
         self.token_refresh_lock = threading.Lock()
@@ -345,9 +346,16 @@ class OpenAIProvider(BaseProvider):
             self.auth_mode = "cookie_only"
         return response
 
-    def _initialize_sync(self) -> None:
-        self.session = Session(impersonate="chrome")
-        self.cookie_metadata = parse_netscape_cookies(load_cookie_text())
+    def _initialize_from_cookie_text_sync(
+        self,
+        cookie_text: str,
+        *,
+        include_hosted_access_token: bool = True,
+    ) -> None:
+        session = Session(impersonate="chrome")
+        cookie_metadata = parse_netscape_cookies(cookie_text)
+        self.session = session
+        self.cookie_metadata = cookie_metadata
         for cookie in self.cookie_metadata:
             self.session.cookies.set(
                 cookie["name"],
@@ -355,7 +363,11 @@ class OpenAIProvider(BaseProvider):
                 domain=cookie["domain"],
                 path=cookie["path"],
             )
-        self.access_token = os.environ.get("CODEX_AUTH_ACCESS_TOKEN", "").strip()
+        self.access_token = (
+            os.environ.get("CODEX_AUTH_ACCESS_TOKEN", "").strip()
+            if include_hosted_access_token
+            else ""
+        )
         self.auth_mode = "hosted_bearer" if self.access_token else "cookie_exchange"
         if not self.access_token:
             response = self.session.get(BASE_URL + "/api/auth/session", timeout=30)
@@ -368,9 +380,50 @@ class OpenAIProvider(BaseProvider):
             raise ChatGPTSessionError("ChatGPT session did not provide an oai-did cookie")
         self.initialized_at = time.time()
 
+    def _initialize_sync(self) -> None:
+        self._initialize_from_cookie_text_sync(load_cookie_text())
+
     async def initialize(self) -> None:
         await asyncio.to_thread(self._initialize_sync)
         logger.info("[OpenAI] HTTP-only provider authenticated; no browser process started")
+
+    async def replace_cookies(self, cookie_text: str) -> dict[str, Any]:
+        """Validate a new cookie set and atomically activate it for future requests."""
+        async with self.credential_update_lock:
+            candidate = OpenAIProvider()
+            try:
+                await asyncio.to_thread(
+                    candidate._initialize_from_cookie_text_sync,
+                    cookie_text,
+                    include_hosted_access_token=False,
+                )
+                details = await asyncio.to_thread(candidate._fetch_account_details_sync)
+            except Exception:
+                await candidate.close()
+                raise
+
+            old_session = None
+            async with self.lock:
+                async with self.metadata_lock:
+                    old_session = self.session
+                    self.session = candidate.session
+                    candidate.session = None
+                    self.access_token = candidate.access_token
+                    self.device_id = candidate.device_id
+                    self.auth_mode = candidate.auth_mode
+                    self.cookie_metadata = [dict(cookie) for cookie in candidate.cookie_metadata]
+                    self.initialized_at = candidate.initialized_at
+                    self.model = "auto"
+                    self.conversation_id = None
+                    self.parent_message_id = None
+                    self._account_cache = None
+                    self._account_cache_time = 0.0
+                    self._models_cache = None
+                    self._models_cache_time = 0.0
+
+            if old_session:
+                await asyncio.to_thread(old_session.close)
+            return details
 
     async def close(self) -> None:
         if self.session:

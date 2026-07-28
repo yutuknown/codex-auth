@@ -6,6 +6,7 @@ from codex_auth.config import (
     get_cookie_file,
     load_auth_data,
     load_cookie_text,
+    save_cookie_text,
 )
 
 
@@ -36,3 +37,14 @@ def test_get_cookie_file_uses_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_AUTH_COOKIE_FILE", str(cookie_file))
 
     assert get_cookie_file() == cookie_file
+
+
+def test_save_cookie_text_atomically_updates_configured_file(monkeypatch, tmp_path):
+    cookie_file = tmp_path / "private" / "cookies.txt"
+    monkeypatch.setenv("CODEX_AUTH_COOKIE_FILE", str(cookie_file))
+
+    result = save_cookie_text("# Netscape HTTP Cookie File\n.example\tTRUE\t/\tTRUE\t0\tname\tvalue")
+
+    assert result == cookie_file
+    assert cookie_file.read_text(encoding="utf-8").endswith("\n")
+    assert not list(cookie_file.parent.glob("*.tmp"))

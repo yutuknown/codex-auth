@@ -5,10 +5,17 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
-from ..config import auth_is_configured, get_auth_file, get_cookie_file
+from ..config import auth_is_configured, get_auth_file, get_cookie_file, save_cookie_text
 
 router = APIRouter()
+MAX_COOKIE_UPDATE_CHARACTERS = 512 * 1024
+
+
+class CookieUpdateRequest(BaseModel):
+    cookies: str = Field(min_length=1, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
+    source_name: str | None = Field(default=None, max_length=128)
 
 
 LOGIN_PAGE = """<!doctype html>
@@ -194,6 +201,69 @@ async def get_account():
             status_code=502,
             detail={"message": str(exc), "type": "upstream_error"},
         ) from exc
+
+
+@router.post("/api/auth/cookies")
+async def update_session_cookies(payload: CookieUpdateRequest):
+    from ..providers.openai.provider import ChatGPTSessionError, provider
+
+    cookie_text = payload.cookies.strip()
+    try:
+        details = await provider.replace_cookies(cookie_text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": str(exc), "type": "invalid_cookie_format"},
+        ) from exc
+    except ChatGPTSessionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": str(exc), "type": "cookie_validation_error"},
+        ) from exc
+
+    file_saved = False
+    persistence_warning = None
+    try:
+        save_cookie_text(cookie_text)
+        file_saved = True
+    except OSError:
+        persistence_warning = (
+            "The cookies are active in this process, but the local cookie file could not be updated"
+        )
+    os.environ["CODEX_AUTH_COOKIES"] = cookie_text
+
+    runtime = provider.runtime_status()
+    profile = details.get("profile") or {}
+    account = details.get("account") or {}
+    entitlement = details.get("entitlement") or {}
+    hosted_on_render = bool(os.environ.get("RENDER"))
+    if hosted_on_render:
+        persistence_warning = (
+            "Active now. To survive a Render restart or deploy, also update the "
+            "CODEX_AUTH_COOKIES secret or attach a persistent disk"
+        )
+    return {
+        "status": "activated",
+        "cookie_count": len(provider.cookie_metadata),
+        "auth_mode": runtime.get("auth_mode"),
+        "session_cookie": runtime.get("session_cookie"),
+        "profile": {
+            "identity_level": profile.get("identity_level"),
+            "id_present": bool(profile.get("id")),
+            "email_present": bool(profile.get("email")),
+        },
+        "account": {
+            "plan_type": account.get("plan_type"),
+            "subscription_plan": entitlement.get("subscription_plan"),
+            "session_access": bool(details.get("can_access_with_session")),
+        },
+        "persistence": {
+            "runtime_active": True,
+            "file_saved": file_saved,
+            "restart_safe": file_saved and not hosted_on_render,
+            "warning": persistence_warning,
+        },
+    }
 
 
 @router.get("/api/models_list")

@@ -590,11 +590,27 @@
         .endpoint-health-pill.restricted::before { background: var(--log-warn); }
         .endpoint-health-pill.error::before { background: var(--log-error); }
         .account-health-note { margin-top: 10px; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+        .cookie-update-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .5fr); gap: 22px; margin-top: 20px; }
+        .cookie-textarea { box-sizing: border-box; width: 100%; min-height: 150px; resize: vertical; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; outline: none; color: var(--text-primary); background: var(--bg-code); font: 12px/1.55 var(--font-mono); -webkit-text-security: disc; }
+        .cookie-textarea.revealed { -webkit-text-security: none; }
+        .cookie-textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+        .cookie-upload-box { display: flex; min-height: 150px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; border: 1px dashed var(--border-strong); border-radius: 8px; color: var(--text-secondary); background: var(--bg-base); text-align: center; }
+        .cookie-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+        .cookie-file-button, .cookie-submit-button, .cookie-secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 7px; padding: 9px 13px; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .cookie-file-button, .cookie-secondary-button { border: 1px solid var(--border-strong); color: var(--text-primary); background: var(--bg-surface); }
+        .cookie-submit-button { border: 1px solid var(--accent); color: #fff; background: var(--accent); }
+        .cookie-submit-button:disabled { cursor: wait; opacity: .55; }
+        .cookie-update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 12px; }
+        .cookie-update-result { display: none; margin-top: 14px; padding: 11px 13px; border: 1px solid var(--border-subtle); border-radius: 7px; color: var(--text-secondary); background: var(--bg-base); font-size: 12px; line-height: 1.5; }
+        .cookie-update-result.success { display: block; color: var(--log-success); border-color: color-mix(in srgb, var(--log-success) 28%, transparent); }
+        .cookie-update-result.error { display: block; color: var(--log-error); border-color: color-mix(in srgb, var(--log-error) 28%, transparent); }
+        .cookie-security-note { margin: 14px 0 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.55; }
 
         @media (max-width: 720px) {
             .detail-grid { grid-template-columns: 1fr; }
             .panel-metric-grid { grid-template-columns: repeat(2, 1fr); }
             .slide-panel { width: 100vw; right: -100vw; }
+            .cookie-update-layout { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -808,6 +824,40 @@
                             </div>
                             <div id="auth-path" class="font-mono" style="color: var(--text-primary); font-size: 13px; word-break: break-all;">Loading...</div>
                         </div>
+                    </div>
+
+                    <div class="bento-card col-12">
+                        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:18px; flex-wrap:wrap;">
+                            <div>
+                                <h3 style="margin:0 0 6px;">Update Session Cookies</h3>
+                                <p style="margin:0;color:var(--text-secondary);font-size:13px;line-height:1.5;">
+                                    Paste a Netscape HTTP Cookie File export or choose a local <span class="font-mono">cookies.txt</span>.
+                                </p>
+                            </div>
+                            <span class="status-badge warning">Sensitive credential</span>
+                        </div>
+                        <div class="cookie-update-layout">
+                            <div>
+                                <label for="cookie-paste" class="account-health-title" style="display:block;margin-bottom:8px;">Paste Netscape cookie text</label>
+                                <textarea id="cookie-paste" class="cookie-textarea" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="# Netscape HTTP Cookie File&#10;.chatgpt.com    TRUE    /    TRUE    ..."></textarea>
+                                <div class="cookie-update-actions">
+                                    <button id="cookie-submit-button" class="cookie-submit-button" type="button" onclick="submitCookieUpdate()">Validate &amp; activate</button>
+                                    <button id="cookie-reveal-button" class="cookie-secondary-button" type="button" onclick="toggleCookieVisibility()">Reveal pasted text</button>
+                                </div>
+                            </div>
+                            <div class="cookie-upload-box">
+                                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+                                <div id="cookie-file-name">No file selected</div>
+                                <label class="cookie-file-button" for="cookie-file-input">Choose cookies.txt</label>
+                                <input id="cookie-file-input" class="cookie-file-input" type="file" accept=".txt,text/plain" onchange="handleCookieFile(event)">
+                                <span style="font-size:11px;color:var(--text-tertiary);">Maximum 512 KB · read in this browser only for submission</span>
+                            </div>
+                        </div>
+                        <div id="cookie-update-result" class="cookie-update-result" role="status" aria-live="polite"></div>
+                        <p class="cookie-security-note">
+                            Cookie values are never returned by the API or written to request logs. Activation is immediate.
+                            On Render, update <span class="font-mono">CODEX_AUTH_COOKIES</span> too if the replacement must survive a restart or redeploy.
+                        </p>
                     </div>
                     
                     <div class="bento-card col-4">
@@ -1384,6 +1434,114 @@
                 });
             } catch (e) {}
         }
+
+        let pendingCookieFileText = null;
+        let pendingCookieFileName = null;
+
+        function showCookieUpdateResult(message, type) {
+            const result = document.getElementById('cookie-update-result');
+            result.className = `cookie-update-result ${type}`;
+            result.textContent = message;
+        }
+
+        async function handleCookieFile(event) {
+            const file = event.target.files && event.target.files[0];
+            pendingCookieFileText = null;
+            pendingCookieFileName = null;
+            if (!file) {
+                document.getElementById('cookie-file-name').textContent = 'No file selected';
+                return;
+            }
+            if (file.size > 512 * 1024) {
+                event.target.value = '';
+                document.getElementById('cookie-file-name').textContent = 'No file selected';
+                showCookieUpdateResult('The selected file exceeds the 512 KB limit.', 'error');
+                return;
+            }
+            try {
+                pendingCookieFileText = await file.text();
+                pendingCookieFileName = file.name;
+                document.getElementById('cookie-file-name').textContent =
+                    `${file.name} · ${(file.size / 1024).toFixed(1)} KB ready`;
+                document.getElementById('cookie-paste').value = '';
+                showCookieUpdateResult('File loaded locally. Select Validate & activate to apply it.', 'success');
+            } catch (error) {
+                event.target.value = '';
+                document.getElementById('cookie-file-name').textContent = 'No file selected';
+                showCookieUpdateResult(`Could not read the selected file: ${error.message}`, 'error');
+            }
+        }
+
+        function toggleCookieVisibility() {
+            const textarea = document.getElementById('cookie-paste');
+            const button = document.getElementById('cookie-reveal-button');
+            textarea.classList.toggle('revealed');
+            button.textContent = textarea.classList.contains('revealed')
+                ? 'Hide pasted text'
+                : 'Reveal pasted text';
+        }
+
+        async function submitCookieUpdate() {
+            const textarea = document.getElementById('cookie-paste');
+            const button = document.getElementById('cookie-submit-button');
+            const cookieText = pendingCookieFileText || textarea.value;
+            if (!cookieText.trim()) {
+                showCookieUpdateResult('Paste Netscape cookie text or choose cookies.txt first.', 'error');
+                return;
+            }
+            button.disabled = true;
+            button.textContent = 'Validating session...';
+            showCookieUpdateResult(
+                'Validating the replacement against ChatGPT before changing the active session.',
+                'success',
+            );
+            try {
+                const response = await fetch('/api/auth/cookies', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        cookies: cookieText,
+                        source_name: pendingCookieFileName || 'pasted-text',
+                    }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    const detail = data.detail || {};
+                    throw new Error(detail.message || data.message || `Cookie update returned HTTP ${response.status}`);
+                }
+                const plan = friendlyPlan(data.account && data.account.plan_type);
+                const persistence = data.persistence || {};
+                const persistenceText = persistence.warning
+                    ? ` ${persistence.warning}.`
+                    : ' The protected cookie file was updated for future starts.';
+                showCookieUpdateResult(
+                    `Session activated with ${data.cookie_count} cookies · ${plan} · ${data.auth_mode}.${persistenceText}`,
+                    'success',
+                );
+                textarea.value = '';
+                textarea.classList.remove('revealed');
+                document.getElementById('cookie-reveal-button').textContent = 'Reveal pasted text';
+                document.getElementById('cookie-file-input').value = '';
+                document.getElementById('cookie-file-name').textContent = 'No file selected';
+                pendingCookieFileText = null;
+                pendingCookieFileName = null;
+                await Promise.all([fetchAccount(), fetchStatus(), fetchModels()]);
+            } catch (error) {
+                showCookieUpdateResult(`Cookie update failed: ${error.message}`, 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Validate & activate';
+            }
+        }
+
+        document.getElementById('cookie-paste').addEventListener('input', () => {
+            if (pendingCookieFileText !== null) {
+                pendingCookieFileText = null;
+                pendingCookieFileName = null;
+                document.getElementById('cookie-file-input').value = '';
+                document.getElementById('cookie-file-name').textContent = 'No file selected';
+            }
+        });
 
         // Real account and entitlement data
         async function fetchAccount() {

@@ -23,8 +23,7 @@ jobs:
       
     - name: Install dependencies
       run: |
-        uv pip install --system -e .
-        uv pip install --system ruff pytest
+        uv pip install --system -e ".[test]"
         
     - name: Lint with Ruff
       run: |

@@ -35,7 +35,10 @@ expire.
 
 For a different local path, set `CODEX_AUTH_COOKIE_FILE`. For hosted services,
 set the complete file contents in the secret environment variable
-`CODEX_AUTH_COOKIES`.
+`CODEX_AUTH_COOKIES`. If the hosting provider's datacenter IP is blocked from
+the cookie-to-token exchange, also set `CODEX_AUTH_ACCESS_TOKEN` to the bearer
+token from the same authenticated browser session. That token is sensitive and
+short-lived.
 
 ## Run locally
 
@@ -62,8 +65,10 @@ Free plan.
 
 1. Create a Render Blueprint or Docker web service from this repository.
 2. Set secret `CODEX_AUTH_COOKIES` to the full Netscape cookie-file contents.
-3. Keep `CODEX_AUTH_API_KEY` enabled and private.
-4. When the ChatGPT session expires, replace `CODEX_AUTH_COOKIES` and redeploy.
+3. If startup reports HTTP 403 during session validation, also set the secret
+   `CODEX_AUTH_ACCESS_TOKEN` captured from the same browser session.
+4. Keep `CODEX_AUTH_API_KEY` enabled and private.
+5. When the ChatGPT session expires, replace the cookies and access token.
 
 The health check is `GET /healthz`. See
 [`docs/low-memory-architecture.md`](docs/low-memory-architecture.md) for the

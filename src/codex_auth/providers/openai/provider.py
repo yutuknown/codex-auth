@@ -199,12 +199,15 @@ class OpenAIProvider(BaseProvider):
                 domain=cookie["domain"],
                 path=cookie["path"],
             )
-        response = self.session.get(BASE_URL + "/api/auth/session", timeout=30)
-        if response.status_code != 200:
-            raise ChatGPTSessionError(
-                f"ChatGPT session validation failed with HTTP {response.status_code}; refresh cookies.txt"
-            )
-        self.access_token = (response.json() or {}).get("accessToken", "")
+        self.access_token = os.environ.get("CODEX_AUTH_ACCESS_TOKEN", "").strip()
+        if not self.access_token:
+            response = self.session.get(BASE_URL + "/api/auth/session", timeout=30)
+            if response.status_code != 200:
+                raise ChatGPTSessionError(
+                    f"ChatGPT session validation failed with HTTP {response.status_code}; "
+                    "refresh cookies.txt or set CODEX_AUTH_ACCESS_TOKEN for hosted deployments"
+                )
+            self.access_token = (response.json() or {}).get("accessToken", "")
         self.device_id = self.session.cookies.get("oai-did") or ""
         if not self.access_token or not self.device_id:
             raise ChatGPTSessionError("ChatGPT session did not provide an access token and oai-did cookie")

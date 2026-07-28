@@ -8,6 +8,8 @@ services:
     envVars:
       - key: CODEX_AUTH_COOKIES
         sync: false
+      - key: CODEX_AUTH_ACCESS_TOKEN
+        sync: false
       - key: CODEX_AUTH_API_KEY
         generateValue: true
       - key: CODEX_AUTH_OPEN_DASHBOARD

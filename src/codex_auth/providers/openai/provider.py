@@ -42,7 +42,7 @@ def parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
         fields = line.split("\t")
         if len(fields) != 7:
             raise ValueError(f"Invalid Netscape cookie record on line {line_number}")
-        domain, _, path, secure, _, name, value = fields
+        domain, _, path, secure, expires, name, value = fields
         cookies.append(
             {
                 "name": name,
@@ -50,6 +50,7 @@ def parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
                 "domain": domain,
                 "path": path or "/",
                 "secure": secure.upper() == "TRUE",
+                "expires_at": int(expires) if expires.isdigit() and int(expires) > 0 else None,
             }
         )
     if not cookies:
@@ -165,6 +166,31 @@ class OpenAIProvider(BaseProvider):
         self.conversation_id: str | None = None
         self.parent_message_id: str | None = None
         self.lock = asyncio.Lock()
+        self.auth_mode = "cookie_exchange"
+        self.cookie_metadata: list[dict[str, Any]] = []
+        self.initialized_at = time.time()
+        self._account_cache: dict[str, Any] | None = None
+        self._account_cache_time = 0.0
+
+    @staticmethod
+    def _jwt_claims(token: str) -> dict[str, Any]:
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * ((4 - len(payload) % 4) % 4)
+            return json.loads(base64.urlsafe_b64decode(payload))
+        except (IndexError, ValueError, json.JSONDecodeError):
+            return {}
+
+    @staticmethod
+    def _expiry_details(expires_at: int | float | None) -> dict[str, Any]:
+        if not expires_at:
+            return {"expires_at": None, "seconds_remaining": None, "expired": None}
+        remaining = int(expires_at - time.time())
+        return {
+            "expires_at": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(),
+            "seconds_remaining": remaining,
+            "expired": remaining <= 0,
+        }
 
     def _headers(self, target: str, *, accept: str = "*/*") -> dict[str, str]:
         headers = {
@@ -192,7 +218,8 @@ class OpenAIProvider(BaseProvider):
 
     def _initialize_sync(self) -> None:
         self.session = Session(impersonate="chrome")
-        for cookie in parse_netscape_cookies(load_cookie_text()):
+        self.cookie_metadata = parse_netscape_cookies(load_cookie_text())
+        for cookie in self.cookie_metadata:
             self.session.cookies.set(
                 cookie["name"],
                 cookie["value"],
@@ -200,6 +227,7 @@ class OpenAIProvider(BaseProvider):
                 path=cookie["path"],
             )
         self.access_token = os.environ.get("CODEX_AUTH_ACCESS_TOKEN", "").strip()
+        self.auth_mode = "hosted_bearer" if self.access_token else "cookie_exchange"
         if not self.access_token:
             response = self.session.get(BASE_URL + "/api/auth/session", timeout=30)
             if response.status_code != 200:
@@ -211,6 +239,7 @@ class OpenAIProvider(BaseProvider):
         self.device_id = self.session.cookies.get("oai-did") or ""
         if not self.access_token or not self.device_id:
             raise ChatGPTSessionError("ChatGPT session did not provide an access token and oai-did cookie")
+        self.initialized_at = time.time()
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self._initialize_sync)
@@ -402,6 +431,121 @@ class OpenAIProvider(BaseProvider):
             return (response.json() or {}).get("models", [])
 
         return await asyncio.to_thread(fetch)
+
+    def runtime_status(self) -> dict[str, Any]:
+        token_expiry = self._jwt_claims(self.access_token).get("exp")
+        session_cookie = next(
+            (cookie for cookie in self.cookie_metadata if cookie["name"] == "__Secure-next-auth.session-token"),
+            {},
+        )
+        device_cookie = next(
+            (cookie for cookie in self.cookie_metadata if cookie["name"] == "oai-did"),
+            {},
+        )
+        return {
+            "transport": "curl-cffi",
+            "browser_process": False,
+            "max_concurrent_generations": 1,
+            "auth_mode": self.auth_mode,
+            "initialized": bool(self.session and self.access_token and self.device_id),
+            "uptime_seconds": int(time.time() - self.initialized_at),
+            "selected_model": self.model,
+            "conversation_active": bool(self.conversation_id),
+            "access_token": self._expiry_details(token_expiry),
+            "session_cookie": self._expiry_details(session_cookie.get("expires_at")),
+            "device_cookie": self._expiry_details(device_cookie.get("expires_at")),
+            "proxy_capabilities": {
+                "text": True,
+                "streaming": True,
+                "ollama_compatibility": True,
+                "file_uploads": False,
+                "web_search": False,
+                "image_input": False,
+            },
+        }
+
+    def _fetch_account_details_sync(self) -> dict[str, Any]:
+        assert self.session
+        headers = self._headers("/backend-api/accounts/check/v4-2023-04-27")
+        account_response = self.session.get(
+            BASE_URL + "/backend-api/accounts/check/v4-2023-04-27",
+            headers=headers,
+            timeout=30,
+        )
+        me_response = self.session.get(
+            BASE_URL + "/backend-api/me",
+            headers=self._headers("/backend-api/me"),
+            timeout=30,
+        )
+        settings_response = self.session.get(
+            BASE_URL + "/backend-api/settings/user",
+            headers=self._headers("/backend-api/settings/user"),
+            timeout=30,
+        )
+        failures = [
+            response.status_code
+            for response in (account_response, me_response, settings_response)
+            if response.status_code != 200
+        ]
+        if failures:
+            raise ChatGPTSessionError(f"Account discovery failed with HTTP {failures[0]}")
+
+        account_data = (account_response.json() or {}).get("accounts", {}).get("default", {})
+        account = account_data.get("account") or {}
+        entitlement = account_data.get("entitlement") or {}
+        subscription = account_data.get("last_active_subscription") or {}
+        profile = me_response.json() or {}
+        user_settings = (settings_response.json() or {}).get("settings") or {}
+        return {
+            "profile": {
+                "name": profile.get("name") or profile.get("first_name"),
+                "email": profile.get("email"),
+                "created_at": self._expiry_details(profile.get("created")).get("expires_at"),
+                "country": profile.get("country"),
+                "region": profile.get("region"),
+                "region_code": profile.get("region_code"),
+                "mfa_enabled": bool(profile.get("mfa_flag_enabled")),
+                "email_domain_type": profile.get("email_domain_type"),
+            },
+            "account": {
+                "id": account.get("account_id"),
+                "role": account.get("account_user_role"),
+                "structure": account.get("structure"),
+                "plan_type": account.get("plan_type"),
+                "is_deactivated": bool(account.get("is_deactivated")),
+                "residency": account.get("account_compute_residency_display_name"),
+                "residency_description": account.get("account_compute_residency_description"),
+            },
+            "entitlement": {
+                "subscription_plan": entitlement.get("subscription_plan"),
+                "has_active_subscription": bool(entitlement.get("has_active_subscription")),
+                "expires_at": entitlement.get("expires_at"),
+                "renews_at": entitlement.get("renews_at"),
+                "will_renew": bool(subscription.get("will_renew")),
+                "is_delinquent": bool(entitlement.get("is_delinquent")),
+            },
+            "privacy": {
+                "training_allowed": user_settings.get("training_allowed"),
+                "codex_training_allowed": user_settings.get("codex_training_allowed_v2"),
+                "connector_search_enabled": user_settings.get("connector_search_enabled"),
+                "voice_enabled": user_settings.get("voice_enabled"),
+            },
+            "feature_count": len(account_data.get("features") or []),
+            "can_access_with_session": bool(account_data.get("can_access_with_session")),
+            "runtime": self.runtime_status(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def fetch_account_details(self, *, refresh: bool = False) -> dict[str, Any]:
+        if not refresh and self._account_cache and time.time() - self._account_cache_time < 60:
+            cached = dict(self._account_cache)
+            cached["runtime"] = self.runtime_status()
+            return cached
+        async with self.lock:
+            details = await asyncio.to_thread(self._fetch_account_details_sync)
+            self._account_cache = details
+            self._account_cache_time = time.time()
+            return details
 
     async def proxy_request(
         self,

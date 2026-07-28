@@ -145,6 +145,9 @@ async def get_usage():
 
 @router.get("/api/status")
 async def get_status():
+    from .. import __version__
+    from ..providers.openai.provider import provider
+
     auth_file = get_auth_file()
     cookie_file = get_cookie_file()
     is_authenticated = auth_is_configured()
@@ -159,8 +162,18 @@ async def get_status():
     return {
         "status": "Active" if is_authenticated else "Missing Authentication",
         "auth_file_path": auth_source if is_authenticated else None,
-        "is_authenticated": is_authenticated
+        "is_authenticated": is_authenticated,
+        "version": __version__,
+        "runtime": provider.runtime_status(),
     }
+
+
+@router.get("/api/account")
+async def get_account():
+    from ..providers.openai.provider import provider
+
+    return await provider.fetch_account_details()
+
 
 @router.get("/api/models_list")
 async def get_models_list():
@@ -173,32 +186,37 @@ async def get_models_list():
     for m in real_models:
         slug = m.get("slug", "auto")
         max_tokens = m.get("max_tokens", 32768)
-        tags = m.get("tags", [])
-        
         product_features = m.get("product_features", {})
         attachments = product_features.get("attachments", {})
-        has_image_support = "image_mime_types" in attachments and len(attachments["image_mime_types"]) > 0
-        
-        is_vision = "vision" in tags or "multimodal" in tags or "gpt4" in tags or has_image_support
-        is_tools = "tools" in tags or "functions" in tags or "gpt4" in tags or "o1" in slug or "gpt-4o" in slug
-        is_search = "browsing" in tags or "search" in tags or "web" in tags
-        is_data = "code" in tags or "data" in tags or "analysis" in tags or "code_interpreter" in tags
-        
-        # Simple heuristic for tiers based on model name
-        tier = "Tier 2: Standard"
-        if "mini" in slug or "haiku" in slug or "flash" in slug:
-            tier = "Tier 1: Fast"
-        elif "o1" in slug or "opus" in slug or "pro" in slug:
-            tier = "Tier 3: Reasoning"
+        enabled_tools = m.get("enabled_tools") or []
             
         models_out.append({
             "id": slug,
+            "title": m.get("title") or slug,
+            "description": m.get("description") or "",
             "context_length": max_tokens,
-            "vision": is_vision,
-            "tools": is_tools,
-            "search": is_search,
-            "data": is_data,
-            "tier": tier
+            "reasoning_type": m.get("reasoning_type") or "none",
+            "configurable_thinking_effort": bool(m.get("configurable_thinking_effort")),
+            "upstream_capabilities": {
+                "attachments": bool(attachments),
+                "image_input": bool(attachments.get("image_mime_types")),
+                "tools": "tools" in enabled_tools or "tools2" in enabled_tools,
+                "search": "search" in enabled_tools,
+                "canvas": "canvas" in enabled_tools,
+                "image_generation": "image_gen_tool_enabled" in enabled_tools,
+            },
+            "proxy_capabilities": {
+                "text": True,
+                "streaming": True,
+                "image_input": False,
+                "file_uploads": False,
+                "web_search": False,
+            },
         })
         
-    return {"models": models_out}
+    return {
+        "models": models_out,
+        "model_count": len(models_out),
+        "default_model": "auto",
+        "source": "/backend-api/models",
+    }

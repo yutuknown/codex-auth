@@ -563,6 +563,18 @@
             font-size: 13px;
             color: var(--text-secondary);
         }
+
+        .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; margin-top: 22px; }
+        .detail-item label { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+        .detail-item div { color: var(--text-primary); font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+        .progress-track { height: 6px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: var(--border-subtle); }
+        .progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width .35s ease; }
+        .capability-list { display: flex; flex-wrap: wrap; gap: 6px; }
+        .warning-note { margin-top: 18px; padding: 12px 14px; border: 1px solid rgba(251, 191, 36, .25); border-radius: 8px; color: #fbbf24; background: rgba(251, 191, 36, .06); font-size: 12px; line-height: 1.5; }
+
+        @media (max-width: 720px) {
+            .detail-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -686,19 +698,34 @@
             <!-- Models View -->
             <div id="models-view" class="view">
                 <div class="header">
-                    <h1>Routing Configuration</h1>
-                    <p>Dynamically detected models from your active authenticated session.</p>
+                    <h1>Upstream Model Catalog</h1>
+                    <p>Live ChatGPT metadata, separated from capabilities implemented by this HTTP proxy.</p>
                 </div>
                 <div class="bento-grid">
+                    <div class="bento-card col-4">
+                        <h3>Discovered Models</h3>
+                        <div class="metric mono" id="catalog-model-count">-</div>
+                        <div class="sub-metric">Authenticated account catalog</div>
+                    </div>
+                    <div class="bento-card col-4">
+                        <h3>Default Route</h3>
+                        <div class="metric mono" id="catalog-default-model">-</div>
+                        <div class="sub-metric">Reported by the web session</div>
+                    </div>
+                    <div class="bento-card col-4">
+                        <h3>Proxy Transport</h3>
+                        <div class="metric mono">HTTP</div>
+                        <div class="sub-metric">curl-cffi · no Chromium</div>
+                    </div>
                     <div class="bento-card col-12">
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Provider</th>
-                                    <th>Model ID</th>
-                                    <th>Routing Tier</th>
-                                    <th>Context Window</th>
-                                    <th>Capabilities</th>
+                                    <th>Model</th>
+                                    <th>Reasoning</th>
+                                    <th>Max Tokens</th>
+                                    <th>Upstream Features</th>
+                                    <th>Proxy Route</th>
                                 </tr>
                             </thead>
                             <tbody id="models-list-body">
@@ -712,18 +739,29 @@
             <!-- Account View -->
             <div id="account-view" class="view">
                 <div class="header">
-                    <h1>Security Center</h1>
-                    <p>Manage your active authentication session and local credentials.</p>
+                    <h1>Account & Session</h1>
+                    <p>Live profile, entitlement, privacy, and runtime state from authenticated ChatGPT endpoints.</p>
                 </div>
                 
                 <div class="bento-grid">
                     <div class="bento-card col-12">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
                             <div>
-                                <h3 style="margin: 0 0 6px 0;">Active Session</h3>
-                                <p style="color: var(--text-secondary); margin: 0; font-size: 14px;">Your current proxy authentication status.</p>
+                                <h3 style="margin: 0 0 6px 0;" id="account-name">Authenticated Account</h3>
+                                <p style="color: var(--text-secondary); margin: 0; font-size: 14px;" id="account-email">Loading profile from /backend-api/me…</p>
                             </div>
                             <div id="auth-status" class="status-badge" style="border: 1px solid var(--border-strong);">Fetching...</div>
+                        </div>
+
+                        <div class="detail-grid" style="margin-bottom:24px;">
+                            <div class="detail-item"><label>Account ID</label><div class="font-mono" id="account-id">-</div></div>
+                            <div class="detail-item"><label>Role</label><div id="account-role">-</div></div>
+                            <div class="detail-item"><label>Plan</label><div id="account-plan">-</div></div>
+                            <div class="detail-item"><label>Entitlement</label><div id="account-entitlement">-</div></div>
+                            <div class="detail-item"><label>Location</label><div id="account-location">-</div></div>
+                            <div class="detail-item"><label>MFA</label><div id="account-mfa">-</div></div>
+                            <div class="detail-item"><label>Workspace</label><div id="account-structure">-</div></div>
+                            <div class="detail-item"><label>Compute Residency</label><div id="account-residency">-</div></div>
                         </div>
                         
                         <div style="background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 16px;">
@@ -738,14 +776,39 @@
                         </div>
                     </div>
                     
-                    <div class="bento-card col-12">
-                        <h3 style="margin-top: 0; margin-bottom: 6px;">CLI Tools</h3>
-                        <p style="color: var(--text-secondary); font-size: 14px; margin: 0 0 16px 0;">To refresh your session or switch accounts, run this command in your terminal:</p>
-                        <div style="display: flex; background: var(--bg-code); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;">
-                            <div class="font-mono" id="cli-cmd" style="padding: 16px; flex: 1; color: var(--text-primary); font-size: 13px;">$ codex-auth auth</div>
-                            <button onclick="copyToClipboard('cli-cmd', this, true)" style="background: var(--bg-surface-hover); border: none; border-left: 1px solid var(--border-subtle); color: var(--text-primary); padding: 0 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s;">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                            </button>
+                    <div class="bento-card col-4">
+                        <h3>Credential Lifetime</h3>
+                        <div class="detail-item" style="margin-top:20px;">
+                            <label>Access token</label>
+                            <div class="font-mono" id="token-expiry">-</div>
+                            <div class="progress-track"><div class="progress-fill" id="token-progress"></div></div>
+                        </div>
+                        <div class="detail-item" style="margin-top:20px;"><label>Session cookie</label><div class="font-mono" id="cookie-expiry">-</div></div>
+                        <div class="detail-item" style="margin-top:20px;"><label>Authentication mode</label><div class="font-mono" id="auth-mode">-</div></div>
+                        <div class="warning-note" id="expiry-warning">Checking credential lifetime…</div>
+                    </div>
+
+                    <div class="bento-card col-4">
+                        <h3>HTTP Runtime</h3>
+                        <div class="detail-grid">
+                            <div class="detail-item"><label>Transport</label><div class="font-mono" id="runtime-transport">-</div></div>
+                            <div class="detail-item"><label>Browser Process</label><div id="runtime-browser">-</div></div>
+                            <div class="detail-item"><label>Concurrency</label><div id="runtime-concurrency">-</div></div>
+                            <div class="detail-item"><label>Uptime</label><div class="font-mono" id="runtime-uptime">-</div></div>
+                            <div class="detail-item"><label>Conversation</label><div id="runtime-conversation">-</div></div>
+                            <div class="detail-item"><label>Account Features</label><div id="account-feature-count">-</div></div>
+                        </div>
+                    </div>
+
+                    <div class="bento-card col-4">
+                        <h3>Privacy Settings</h3>
+                        <div class="detail-grid">
+                            <div class="detail-item"><label>Chat Training</label><div id="privacy-training">-</div></div>
+                            <div class="detail-item"><label>Codex Training</label><div id="privacy-codex-training">-</div></div>
+                            <div class="detail-item"><label>Connector Search</label><div id="privacy-connectors">-</div></div>
+                            <div class="detail-item"><label>Voice</label><div id="privacy-voice">-</div></div>
+                            <div class="detail-item"><label>Session Access</label><div id="session-access">-</div></div>
+                            <div class="detail-item"><label>Last Check</label><div class="font-mono" id="account-checked-at">-</div></div>
                         </div>
                     </div>
                 </div>
@@ -811,6 +874,34 @@
         // Theme Toggle Logic
         const root = document.documentElement;
         const savedTheme = localStorage.getItem('theme');
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            })[char]);
+        }
+
+        function capabilityBadge(label, color = 'var(--text-secondary)') {
+            return `<span class="badge" style="color:${color};border-color:var(--border-strong);">${escapeHtml(label)}</span>`;
+        }
+
+        function formatDuration(seconds) {
+            if (seconds === null || seconds === undefined) return 'Unknown';
+            const sign = seconds < 0 ? '-' : '';
+            let remaining = Math.abs(seconds);
+            const days = Math.floor(remaining / 86400);
+            remaining %= 86400;
+            const hours = Math.floor(remaining / 3600);
+            const minutes = Math.floor((remaining % 3600) / 60);
+            if (days) return `${sign}${days}d ${hours}h`;
+            if (hours) return `${sign}${hours}h ${minutes}m`;
+            return `${sign}${minutes}m`;
+        }
+
+        function booleanLabel(value) {
+            if (value === null || value === undefined) return 'Not reported';
+            return value ? 'Enabled' : 'Disabled';
+        }
         
         function setTheme(isLight) {
             if (isLight) {
@@ -1054,31 +1145,107 @@
                 const data = await res.json();
                 const tbody = document.getElementById('models-list-body');
                 tbody.innerHTML = '';
-                
+                document.getElementById('catalog-model-count').textContent = data.model_count ?? data.models.length;
+                document.getElementById('catalog-default-model').textContent = data.default_model || 'auto';
+
                 data.models.forEach(m => {
-                    let badges = '';
-                    if (m.vision) badges += '<span class="badge" style="color: #60a5fa; border-color: rgba(59,130,246,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg> Vision</span>';
-                    if (m.tools) badges += '<span class="badge" style="color: #c084fc; border-color: rgba(192,132,252,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14.7 13.5-3.4-3.4"/><path d="M12 6a4 4 0 1 1-5.7 5.7l-5 5a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l5-5A4 4 0 1 1 12 6Z"/></svg> Tools</span>';
-                    if (m.search) badges += '<span class="badge" style="color: #34d399; border-color: rgba(52,211,153,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg> Web</span>';
-                    if (m.data) badges += '<span class="badge" style="color: #fbbf24; border-color: rgba(251,191,36,0.3); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg> Code</span>';
-                    
-                    if (!badges) badges = '<span class="badge" style="color: var(--text-secondary); border-color: var(--border-strong); display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Text</span>';
-                    
-                    const provider = m.id.startsWith('claude') ? 'Anthropic' : 
-                                     m.id.startsWith('gemini') ? 'Google' : 
-                                     m.id.startsWith('llama') ? 'Meta' : 'OpenAI';
-                    
+                    const upstream = m.upstream_capabilities || {};
+                    const upstreamBadges = [];
+                    if (upstream.image_input) upstreamBadges.push(capabilityBadge('Image input', '#60a5fa'));
+                    else if (upstream.attachments) upstreamBadges.push(capabilityBadge('Attachments', '#60a5fa'));
+                    if (upstream.tools) upstreamBadges.push(capabilityBadge('Tools', '#c084fc'));
+                    if (upstream.search) upstreamBadges.push(capabilityBadge('Search', '#34d399'));
+                    if (upstream.canvas) upstreamBadges.push(capabilityBadge('Canvas', '#fbbf24'));
+                    if (upstream.image_generation) upstreamBadges.push(capabilityBadge('Image gen', '#fb7185'));
+                    const proxyBadges = [
+                        capabilityBadge('Text', '#34d399'),
+                        capabilityBadge('Streaming', '#34d399'),
+                        capabilityBadge('No files/web', '#fbbf24')
+                    ];
+
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
-                        <td class="font-mono" style="color: var(--text-secondary)">${provider}</td>
-                        <td class="font-mono" style="font-weight: 500">${m.id}</td>
-                        <td style="color: var(--log-info); font-size: 13px;">${m.tier}</td>
+                        <td><div style="font-weight:600">${escapeHtml(m.title || m.id)}</div><div class="font-mono" style="color:var(--text-secondary);font-size:11px;margin-top:4px">${escapeHtml(m.id)}</div></td>
+                        <td><span class="badge">${escapeHtml(m.reasoning_type || 'none')}</span></td>
                         <td class="font-mono">${m.context_length.toLocaleString()}</td>
-                        <td><div style="display: flex; gap: 6px; flex-wrap: wrap;">${badges}</div></td>
+                        <td><div class="capability-list">${upstreamBadges.join('') || capabilityBadge('Text')}</div></td>
+                        <td><div class="capability-list">${proxyBadges.join('')}</div></td>
                     `;
                     tbody.appendChild(tr);
                 });
             } catch (e) {}
+        }
+
+        // Real account and entitlement data
+        async function fetchAccount() {
+            try {
+                const res = await fetch('/api/account');
+                if (!res.ok) throw new Error(`Account endpoint returned ${res.status}`);
+                const data = await res.json();
+                const profile = data.profile || {};
+                const account = data.account || {};
+                const entitlement = data.entitlement || {};
+                const privacy = data.privacy || {};
+                const runtime = data.runtime || {};
+                const token = runtime.access_token || {};
+                const cookie = runtime.session_cookie || {};
+
+                document.getElementById('account-name').textContent = profile.name || 'Authenticated Account';
+                document.getElementById('account-email').textContent = profile.email || 'Email not reported';
+                document.getElementById('account-id').textContent = account.id || '-';
+                document.getElementById('account-role').textContent = account.role || '-';
+                document.getElementById('account-plan').textContent = account.plan_type || '-';
+                document.getElementById('account-entitlement').textContent =
+                    `${entitlement.subscription_plan || 'Not reported'} · ${entitlement.has_active_subscription ? 'active' : 'inactive'}`;
+                document.getElementById('account-location').textContent =
+                    [profile.region, profile.region_code, profile.country].filter(Boolean).join(', ') || '-';
+                document.getElementById('account-mfa').textContent = profile.mfa_enabled ? 'Enabled' : 'Disabled';
+                document.getElementById('account-structure').textContent = account.structure || '-';
+                document.getElementById('account-residency').textContent = account.residency || '-';
+                document.getElementById('account-feature-count').textContent = `${data.feature_count ?? 0} reported`;
+                document.getElementById('session-access').textContent = data.can_access_with_session ? 'Allowed' : 'Denied';
+                document.getElementById('account-checked-at').textContent =
+                    data.checked_at ? new Date(data.checked_at).toLocaleString() : '-';
+
+                document.getElementById('privacy-training').textContent = booleanLabel(privacy.training_allowed);
+                document.getElementById('privacy-codex-training').textContent = booleanLabel(privacy.codex_training_allowed);
+                document.getElementById('privacy-connectors').textContent = booleanLabel(privacy.connector_search_enabled);
+                document.getElementById('privacy-voice').textContent = booleanLabel(privacy.voice_enabled);
+
+                document.getElementById('runtime-transport').textContent = runtime.transport || '-';
+                document.getElementById('runtime-browser').textContent = runtime.browser_process ? 'Running' : 'None';
+                document.getElementById('runtime-concurrency').textContent =
+                    `${runtime.max_concurrent_generations ?? 1} generation`;
+                document.getElementById('runtime-uptime').textContent = formatDuration(runtime.uptime_seconds);
+                document.getElementById('runtime-conversation').textContent =
+                    runtime.conversation_active ? `Active · ${runtime.selected_model}` : 'Fresh chat';
+                document.getElementById('auth-mode').textContent = runtime.auth_mode || '-';
+                document.getElementById('token-expiry').textContent =
+                    token.seconds_remaining === null ? 'Unknown' : `${formatDuration(token.seconds_remaining)} remaining`;
+                document.getElementById('cookie-expiry').textContent =
+                    cookie.seconds_remaining === null ? 'Session cookie' : `${formatDuration(cookie.seconds_remaining)} remaining`;
+
+                const tokenPct = token.seconds_remaining === null
+                    ? 0
+                    : Math.max(0, Math.min(100, token.seconds_remaining / (10 * 86400) * 100));
+                const tokenProgress = document.getElementById('token-progress');
+                tokenProgress.style.width = `${tokenPct}%`;
+                tokenProgress.style.background = tokenPct < 20 ? '#f87171' : tokenPct < 45 ? '#fbbf24' : 'var(--accent)';
+
+                const warning = document.getElementById('expiry-warning');
+                if (token.expired || (token.seconds_remaining !== null && token.seconds_remaining < 86400)) {
+                    warning.textContent = 'Access token is expired or expires within 24 hours. Update the Render secret.';
+                    warning.style.color = '#f87171';
+                    warning.style.borderColor = 'rgba(248,113,113,.3)';
+                } else {
+                    warning.textContent = `Hosted bearer renewal is manual. Cookie lifetime: ${formatDuration(cookie.seconds_remaining)}.`;
+                }
+            } catch (error) {
+                const authStatus = document.getElementById('auth-status');
+                authStatus.className = 'status-badge error';
+                authStatus.textContent = '● Account API Error';
+                document.getElementById('account-email').textContent = error.message;
+            }
         }
 
         // Status
@@ -1105,11 +1272,13 @@
         fetchUsage();
         fetchModels();
         fetchStatus();
+        fetchAccount();
         
         setInterval(fetchLogs, 1000);
         setInterval(fetchUsage, 3000);
         setInterval(fetchModels, 30000);
         setInterval(fetchStatus, 10000);
+        setInterval(fetchAccount, 60000);
 
         function copyToClipboard(elementId, btnElement, stripDollar = false) {
             let text = document.getElementById(elementId).innerText;

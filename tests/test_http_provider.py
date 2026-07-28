@@ -18,6 +18,7 @@ def test_parse_netscape_cookie_and_http_only_prefix():
             "domain": ".chatgpt.com",
             "path": "/",
             "secure": True,
+            "expires_at": None,
         }
     ]
 
@@ -87,3 +88,28 @@ def test_initialize_uses_hosted_access_token_without_session_exchange(monkeypatc
 
     assert provider.access_token == "hosted-token"
     assert provider.device_id == "device"
+    assert provider.auth_mode == "hosted_bearer"
+
+
+def test_expiry_details_reports_remaining_lifetime(monkeypatch):
+    monkeypatch.setattr("codex_auth.providers.openai.provider.time.time", lambda: 1_000)
+
+    details = OpenAIProvider._expiry_details(1_120)
+
+    assert details["seconds_remaining"] == 120
+    assert details["expired"] is False
+    assert details["expires_at"] == "1970-01-01T00:18:40+00:00"
+
+
+def test_runtime_status_distinguishes_proxy_from_upstream_capabilities():
+    provider = OpenAIProvider()
+    provider.access_token = ""
+    provider.device_id = ""
+
+    status = provider.runtime_status()
+
+    assert status["transport"] == "curl-cffi"
+    assert status["browser_process"] is False
+    assert status["max_concurrent_generations"] == 1
+    assert status["proxy_capabilities"]["streaming"] is True
+    assert status["proxy_capabilities"]["file_uploads"] is False

@@ -1,0 +1,3 @@
+Codex attachment verification file.
+Verification token: NIO-PROOF-7282026
+Expected image subject count: three couples.

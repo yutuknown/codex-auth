@@ -11,7 +11,14 @@ class BaseProvider(ABC):
         pass
 
     @abstractmethod
-    async def generate_stream(self, prompt: str, files: list = None, web_search: bool = False) -> AsyncGenerator[str, None]:
+    async def generate_stream(
+        self,
+        prompt: str,
+        files: list = None,
+        web_search: bool = False,
+        model: str | None = None,
+        realtime: bool = False,
+    ) -> AsyncGenerator[str, None]:
         """
         Generate a text stream from the AI provider.
         Yields chunks of text as they appear.

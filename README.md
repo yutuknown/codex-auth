@@ -46,7 +46,8 @@ SSE parser, so Chromium and Playwright are not required at runtime.
 
 HTTP-only mode supports text, streaming, image/file attachments, and explicit
 web search without launching Chromium. Uploads accept data URLs, raw base64,
-or public HTTP(S) URLs up to 20 MB.
+or public HTTP(S) URLs up to 20 MB. Generic function tools, Canvas, and
+image-generation responses are not yet exposed by the proxy.
 
 ## 🚀 Getting Started
 
@@ -146,16 +147,18 @@ Configure any OpenAI-compatible client with:
 graph LR
     A[AI Tool / IDE] -->|OpenAI API Request| B(FastAPI Server)
     B -->|Single admission lock| C{curl-cffi HTTP session}
-    C -->|New chat| D[conversation]
-    C -->|Continuation| E[f/conversation prepare + stream]
-    D --> F[SSE text parser]
-    E --> F
-    F --> A
+    C -->|Isolated request| D[ChatGPT conversation]
+    D --> E[SSE parser]
+    D --> F[Canonical response check]
+    E --> G[Response reconciler]
+    F --> G
+    G --> A
 ```
 
 - **FastAPI** handles API routing, API-key checks, and the dashboard.
 - **curl-cffi** maintains the authenticated HTTP cookie session.
-- **The SSE parser** emits assistant text without loading a browser page.
+- **The response reconciler** combines SSE delivery with the canonical stored
+  assistant message for reliable long multimodal and web-search responses.
 - **Typer and Rich** power the CLI.
 
 ## 🤝 Contributors

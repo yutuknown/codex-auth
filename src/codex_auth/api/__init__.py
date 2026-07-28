@@ -1,4 +1,5 @@
 import hashlib
+import itertools
 import logging
 import os
 import secrets
@@ -17,6 +18,8 @@ from ..providers.openai.provider import provider
 
 # Store the last 500 logs in memory for the UI dashboard
 log_stream = deque(maxlen=500)
+log_sequence = itertools.count(1)
+MAX_REQUEST_BODY_BYTES = 30 * 1024 * 1024
 
 class StreamHandler(logging.Handler):
     def emit(self, record):
@@ -26,6 +29,7 @@ class StreamHandler(logging.Handler):
             import re
             msg_clean = re.sub(r'\[/?(?:dim|cyan|red|green|yellow)\]', '', msg)
             log_entry = {
+                "sequence": next(log_sequence),
                 "time": time.strftime("%H:%M:%S", time.localtime(record.created)),
                 "level": record.levelname,
                 "message": msg_clean
@@ -45,7 +49,7 @@ class StreamHandler(logging.Handler):
 # Setup professional minimalist logging for both console and dashboard
 logging.basicConfig(
     level=logging.INFO,
-    format="  [dim]●[/dim] %(message)s",
+    format="  [dim]*[/dim] %(message)s",
     handlers=[
         RichHandler(rich_tracebacks=True, markup=True, show_time=False, show_path=False, show_level=False),
         StreamHandler()
@@ -113,16 +117,46 @@ async def log_requests(request: Request, call_next):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": {
+                            "message": "Request body exceeds the 30 MB limit",
+                            "type": "request_too_large",
+                        }
+                    },
+                )
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"error": {"message": "Invalid Content-Length header", "type": "invalid_request"}},
+            )
+
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
 
-    if request.url.path == "/healthz" or request.url.path.startswith(("/api/", "/v1/", "/backend-api/")):
+    if request.url.path in {"/dashboard", "/login", "/healthz"} or request.url.path.startswith(
+        ("/api/", "/v1/", "/backend-api/")
+    ):
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
     
     path = request.url.path
-    if not path.startswith(("/dashboard", "/api/logs", "/api/usage", "/api/status", "/api/models_list")):
+    quiet_paths = {
+        "/dashboard",
+        "/api/logs",
+        "/api/usage",
+        "/api/status",
+        "/api/account",
+        "/api/models_list",
+    }
+    if path not in quiet_paths:
         logger.info(f"{request.method} {path} {response.status_code}", extra={
             "is_http": True,
             "method": request.method,

@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict
@@ -60,8 +61,12 @@ def load_usage() -> Dict[str, Any]:
 
 def save_usage(data: Dict[str, Any]) -> None:
     usage_file = get_usage_file()
-    with open(usage_file, "w") as f:
-        json.dump(data, f, indent=2)
+    temporary_file = usage_file.with_suffix(".json.tmp")
+    with temporary_file.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_file, usage_file)
 
 def record_usage(model_slug: str, input_tokens: int, output_tokens: int, ttft_s: float = 0.0, generation_time_s: float = 0.0) -> None:
     with _usage_lock:

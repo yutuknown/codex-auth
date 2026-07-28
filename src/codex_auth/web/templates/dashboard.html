@@ -699,7 +699,7 @@
             <div id="models-view" class="view">
                 <div class="header">
                     <h1>Upstream Model Catalog</h1>
-                    <p>Live ChatGPT metadata, separated from capabilities implemented by this HTTP proxy.</p>
+                    <p>ChatGPT-advertised model features are shown separately from capabilities implemented and tested by this proxy.</p>
                 </div>
                 <div class="bento-grid">
                     <div class="bento-card col-4">
@@ -724,8 +724,8 @@
                                     <th>Model</th>
                                     <th>Reasoning</th>
                                     <th>Max Tokens</th>
-                                    <th>Upstream Features</th>
-                                    <th>Proxy Route</th>
+                                    <th>Upstream Advertised</th>
+                                    <th>Proxy Implemented</th>
                                 </tr>
                             </thead>
                             <tbody id="models-list-body">
@@ -1045,7 +1045,7 @@
         // Logs
         const logsContainer = document.getElementById('logs-container');
         const autoScrollToggle = document.getElementById('auto-scroll');
-        let lastLogCount = 0;
+        let lastLogSequence = 0;
         let logIndexCounter = 0;
 
         function renderLog(log) {
@@ -1054,23 +1054,23 @@
             div.className = 'log-row ' + (hasTrace ? 'has-trace' : '');
             
             if (log.is_http) {
-                const mClass = (log.method || '').toLowerCase();
+                const mClass = (log.method || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
                 const statusStr = (log.status || '').toString();
                 const statusClass = statusStr.startsWith('2') ? 'status-2xx' : statusStr.startsWith('4') || statusStr.startsWith('5') ? 'status-5xx' : 'status-3xx';
                 
                 div.innerHTML = `
-                    <span class="log-time">${log.time}</span>
-                    <span class="http-method method-${mClass}">${log.method}</span>
-                    <span class="http-path">${log.path}</span>
-                    <span class="http-status ${statusClass}">${log.status}</span>
-                    <span class="http-latency">${log.latency_ms}ms</span>
+                    <span class="log-time">${escapeHtml(log.time || '')}</span>
+                    <span class="http-method method-${mClass}">${escapeHtml(log.method || '')}</span>
+                    <span class="http-path">${escapeHtml(log.path || '')}</span>
+                    <span class="http-status ${statusClass}">${escapeHtml(statusStr)}</span>
+                    <span class="http-latency">${escapeHtml(log.latency_ms ?? '')}ms</span>
                 `;
             } else {
-                const lvlClass = log.level.toLowerCase();
+                const lvlClass = (log.level || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
                 div.innerHTML = `
-                    <span class="log-time">${log.time}</span>
-                    <span class="log-level ${lvlClass}">${log.level}</span>
-                    <span class="app-log">${log.message}</span>
+                    <span class="log-time">${escapeHtml(log.time || '')}</span>
+                    <span class="log-level ${lvlClass}">${escapeHtml(log.level || '')}</span>
+                    <span class="app-log">${escapeHtml(log.message || '')}</span>
                 `;
             }
 
@@ -1090,13 +1090,23 @@
                 setDisconnected(false);
                 const data = await res.json();
                 const logs = data.logs || [];
-                
-                if (logs.length > lastLogCount) {
-                    const newLogs = logs.slice(lastLogCount);
+
+                const newLogs = logs.filter(log => Number(log.sequence || 0) > lastLogSequence);
+                if (newLogs.length) {
                     newLogs.forEach(log => {
                         logsContainer.appendChild(renderLog(log));
                     });
-                    lastLogCount = logs.length;
+                    while (logsContainer.children.length > 500) {
+                        const oldest = logsContainer.firstElementChild;
+                        if (oldest?.dataset.index) {
+                            traceDataMap.delete(Number(oldest.dataset.index));
+                        }
+                        oldest?.remove();
+                    }
+                    lastLogSequence = Math.max(
+                        lastLogSequence,
+                        ...newLogs.map(log => Number(log.sequence || 0))
+                    );
                     
                     if (autoScrollToggle.checked) {
                         logsContainer.scrollTop = logsContainer.scrollHeight;
@@ -1276,11 +1286,11 @@
         fetchStatus();
         fetchAccount();
         
-        setInterval(fetchLogs, 1000);
-        setInterval(fetchUsage, 3000);
-        setInterval(fetchModels, 30000);
-        setInterval(fetchStatus, 10000);
-        setInterval(fetchAccount, 60000);
+        setInterval(() => { if (!document.hidden) fetchLogs(); }, 1000);
+        setInterval(() => { if (!document.hidden) fetchUsage(); }, 3000);
+        setInterval(() => { if (!document.hidden) fetchModels(); }, 300000);
+        setInterval(() => { if (!document.hidden) fetchStatus(); }, 30000);
+        setInterval(() => { if (!document.hidden) fetchAccount(); }, 300000);
 
         function copyToClipboard(elementId, btnElement, stripDollar = false) {
             let text = document.getElementById(elementId).innerText;

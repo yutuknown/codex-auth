@@ -52,6 +52,11 @@ async def root():
     return RedirectResponse("/login", status_code=303)
 
 
+@router.head("/", include_in_schema=False)
+async def root_head():
+    return RedirectResponse("/login", status_code=303)
+
+
 @router.get("/login", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard_login():
     return LOGIN_PAGE.replace("{error}", "")
@@ -150,7 +155,9 @@ async def get_status():
 
     auth_file = get_auth_file()
     cookie_file = get_cookie_file()
-    is_authenticated = auth_is_configured()
+    is_configured = auth_is_configured()
+    runtime = provider.runtime_status()
+    is_authenticated = bool(runtime["initialized"])
     if os.environ.get("CODEX_AUTH_COOKIES"):
         auth_source = "CODEX_AUTH_COOKIES"
     elif cookie_file.exists():
@@ -160,11 +167,18 @@ async def get_status():
     else:
         auth_source = str(auth_file.absolute())
     return {
-        "status": "Active" if is_authenticated else "Missing Authentication",
-        "auth_file_path": auth_source if is_authenticated else None,
+        "status": (
+            "Active"
+            if is_authenticated
+            else "Configured, not initialized"
+            if is_configured
+            else "Missing Authentication"
+        ),
+        "auth_file_path": auth_source if is_configured else None,
         "is_authenticated": is_authenticated,
+        "is_configured": is_configured,
         "version": __version__,
-        "runtime": provider.runtime_status(),
+        "runtime": runtime,
     }
 
 
@@ -211,6 +225,9 @@ async def get_models_list():
                 "image_input": True,
                 "file_uploads": True,
                 "web_search": True,
+                "function_tools": False,
+                "canvas": False,
+                "image_generation": False,
             },
         })
         

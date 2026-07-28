@@ -2,7 +2,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..providers.openai.provider import provider
+from ..providers.openai.provider import ProviderBusyError, provider
 
 router = APIRouter()
 
@@ -83,25 +83,35 @@ async def ollama_chat(request: Request):
     data = await request.json()
     messages = data.get("messages", [])
     requested_model = data.get("model", "auto")
-    
-    reset_chat = data.get("reset_chat", False)
-    if reset_chat:
-        await provider.reset_session(requested_model)
-        
-    prompt = ""
+    if data.get("tools"):
+        raise HTTPException(status_code=501, detail="Ollama function tools are not implemented by this proxy")
+
+    transcript = []
     images = []
-    
-    if messages:
-        last_msg = messages[-1]
-        prompt = last_msg.get("content", "")
-        if "images" in last_msg and isinstance(last_msg["images"], list):
-            images.extend(last_msg["images"])
+    for message in messages:
+        content = str(message.get("content") or "").strip()
+        if content:
+            transcript.append((str(message.get("role") or "user"), content))
+        if isinstance(message.get("images"), list):
+            images.extend(message["images"])
+    if len(transcript) <= 1:
+        prompt = transcript[0][1] if transcript else ""
+    else:
+        prompt = "Use this transcript as context and answer the final user message.\n\n" + "\n\n".join(
+            f"{role.upper()}:\n{content}" for role, content in transcript
+        )
     
     try:
         web_search = data.get("web_search", False)
         
         full_response = ""
-        async for chunk in provider.generate_stream(prompt.strip(), files=images, web_search=web_search):
+        async for chunk in provider.generate_stream(
+            prompt.strip(),
+            files=images,
+            web_search=web_search,
+            model=requested_model,
+            realtime=False,
+        ):
             full_response += chunk
             
         return {
@@ -113,5 +123,7 @@ async def ollama_chat(request: Request):
             },
             "done": True
         }
+    except ProviderBusyError as e:
+        raise HTTPException(status_code=429, detail=str(e), headers={"Retry-After": "5"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

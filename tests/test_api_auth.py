@@ -1,6 +1,7 @@
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from codex_auth.api import api_key_is_valid, dashboard_session_value
+from codex_auth.api import api_key_is_valid, app, dashboard_session_value
 
 
 def make_request(headers=None):
@@ -40,3 +41,23 @@ def test_api_key_accepts_dashboard_session_cookie():
 
 def test_dashboard_session_does_not_contain_raw_api_key():
     assert "render-secret" not in dashboard_session_value("render-secret")
+
+
+def test_root_head_redirects_instead_of_returning_method_not_allowed():
+    response = TestClient(app).head("/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_oversized_request_is_rejected_before_body_parsing(monkeypatch):
+    monkeypatch.delenv("CODEX_AUTH_API_KEY", raising=False)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        headers={"Content-Length": str(31 * 1024 * 1024)},
+        content=b"{}",
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["type"] == "request_too_large"

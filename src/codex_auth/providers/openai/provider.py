@@ -10,9 +10,12 @@ import os
 import random
 import socket
 import struct
+import threading
 import time
 import urllib.parse
 import uuid
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Iterable
@@ -32,9 +35,16 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENTS = 4
+MAX_ADMITTED_GENERATIONS = 4
+METADATA_CACHE_SECONDS = 300
 
 
 class ChatGPTSessionError(RuntimeError):
+    pass
+
+
+class ProviderBusyError(ChatGPTSessionError):
     pass
 
 
@@ -218,11 +228,15 @@ class OpenAIProvider(BaseProvider):
         self.conversation_id: str | None = None
         self.parent_message_id: str | None = None
         self.lock = asyncio.Lock()
+        self.admission = asyncio.Semaphore(MAX_ADMITTED_GENERATIONS)
+        self.metadata_lock = asyncio.Lock()
         self.auth_mode = "cookie_exchange"
         self.cookie_metadata: list[dict[str, Any]] = []
         self.initialized_at = time.time()
         self._account_cache: dict[str, Any] | None = None
         self._account_cache_time = 0.0
+        self._models_cache: list[Dict[str, Any]] | None = None
+        self._models_cache_time = 0.0
 
     @staticmethod
     def _jwt_claims(token: str) -> dict[str, Any]:
@@ -302,9 +316,10 @@ class OpenAIProvider(BaseProvider):
             await asyncio.to_thread(self.session.close)
 
     async def reset_session(self, model: str):
-        self.model = model or "auto"
-        self.conversation_id = None
-        self.parent_message_id = None
+        async with self.lock:
+            self.model = model or "auto"
+            self.conversation_id = None
+            self.parent_message_id = None
 
     def _chat_requirements(self) -> tuple[str, str | None]:
         assert self.session
@@ -352,9 +367,14 @@ class OpenAIProvider(BaseProvider):
                     response.close()
                     raise ChatGPTSessionError(f"File URL returned HTTP {response.status_code}")
                 content_length = response.headers.get("content-length")
-                if content_length and int(content_length) > MAX_UPLOAD_BYTES:
-                    response.close()
-                    raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
+                if content_length:
+                    try:
+                        if int(content_length) > MAX_UPLOAD_BYTES:
+                            response.close()
+                            raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
+                    except ValueError as exc:
+                        response.close()
+                        raise ChatGPTSessionError("File URL returned an invalid Content-Length header") from exc
                 chunks = []
                 total = 0
                 for chunk in response.iter_content(chunk_size=64 * 1024):
@@ -389,8 +409,12 @@ class OpenAIProvider(BaseProvider):
             declared_mime = media_header.split(";", 1)[0] or declared_mime
             try:
                 if ";base64" in media_header.lower():
+                    if len(encoded) > ((MAX_UPLOAD_BYTES + 2) // 3) * 4:
+                        raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
                     data = base64.b64decode(encoded, validate=True)
                 else:
+                    if len(encoded) > MAX_UPLOAD_BYTES * 3:
+                        raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
                     data = urllib.parse.unquote_to_bytes(encoded)
             except (binascii.Error, ValueError) as exc:
                 raise ChatGPTSessionError("Invalid base64 file data") from exc
@@ -400,6 +424,8 @@ class OpenAIProvider(BaseProvider):
             name = name or response_name
         else:
             try:
+                if len(source) > ((MAX_UPLOAD_BYTES + 2) // 3) * 4:
+                    raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
                 data = base64.b64decode(source, validate=True)
             except (binascii.Error, ValueError) as exc:
                 raise ChatGPTSessionError(
@@ -570,11 +596,69 @@ class OpenAIProvider(BaseProvider):
             raise ChatGPTSessionError("Conversation prepare did not return a conduit token")
         return conduit
 
+    @staticmethod
+    def _canonical_assistant_text(
+        conversation: dict[str, Any],
+        preferred_message_id: str | None = None,
+    ) -> str:
+        candidates = []
+        for node in (conversation.get("mapping") or {}).values():
+            message = (node or {}).get("message") or {}
+            if (message.get("author") or {}).get("role") != "assistant":
+                continue
+            content = message.get("content") or {}
+            if content.get("content_type") not in {"text", "multimodal_text"}:
+                continue
+            text = "".join(part for part in (content.get("parts") or []) if isinstance(part, str))
+            if not text:
+                continue
+            candidates.append(
+                (
+                    message.get("id") == preferred_message_id,
+                    float(message.get("create_time") or 0),
+                    text,
+                )
+            )
+        if not candidates:
+            return ""
+        return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+    def _fetch_canonical_response(
+        self,
+        conversation_id: str,
+        message_id: str | None,
+        minimum_length: int = 0,
+    ) -> str:
+        assert self.session
+        target = f"/backend-api/conversation/{conversation_id}"
+        best_text = ""
+        for attempt in range(3):
+            response = self.session.get(
+                BASE_URL + target,
+                headers=self._headers(target, accept="application/json"),
+                timeout=30,
+            )
+            if response.status_code == 200:
+                text = self._canonical_assistant_text(response.json() or {}, message_id)
+                if len(text) > len(best_text):
+                    best_text = text
+                if text and len(text) >= minimum_length:
+                    return text
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
+        return best_text
+
+    @staticmethod
+    def _text_chunks(text: str, size: int = 512) -> Iterable[str]:
+        for offset in range(0, len(text), size):
+            yield text[offset : offset + size]
+
     def _generate_sync(
         self,
         prompt: str,
         files: list[Any] | None = None,
         web_search: bool = False,
+        buffered: bool = False,
     ) -> Iterable[str]:
         assert self.session
         message_id = str(uuid.uuid4())
@@ -621,6 +705,7 @@ class OpenAIProvider(BaseProvider):
             raise ChatGPTSessionError(f"Conversation request failed with HTTP {response.status_code}")
 
         state: dict[str, Any] = {}
+        streamed_chunks = []
         for raw_line in response.iter_lines():
             if not raw_line:
                 continue
@@ -636,10 +721,23 @@ class OpenAIProvider(BaseProvider):
                 continue
             delta = _message_delta(event, state)
             if delta:
-                yield delta
+                streamed_chunks.append(delta)
+                if not buffered:
+                    yield delta
         self.conversation_id = state.get("conversation_id") or self.conversation_id
         self.parent_message_id = state.get("message_id") or self.parent_message_id
-        if not state.get("text"):
+        streamed_text = "".join(streamed_chunks)
+        canonical_text = ""
+        if buffered and self.conversation_id:
+            canonical_text = self._fetch_canonical_response(
+                self.conversation_id,
+                self.parent_message_id,
+                minimum_length=len(streamed_text),
+            )
+        final_text = canonical_text or streamed_text
+        if buffered:
+            yield from self._text_chunks(final_text)
+        if not final_text:
             raise ChatGPTSessionError("ChatGPT returned no assistant text")
 
     async def generate_stream(
@@ -647,34 +745,80 @@ class OpenAIProvider(BaseProvider):
         prompt: str,
         files: list | None = None,
         web_search: bool = False,
+        model: str | None = None,
+        realtime: bool = False,
     ) -> AsyncGenerator[str, None]:
         if not prompt and not files:
             raise ChatGPTSessionError("Prompt and file input cannot both be empty")
+        if len(files or []) > MAX_ATTACHMENTS:
+            raise ChatGPTSessionError(f"A maximum of {MAX_ATTACHMENTS} attachments is supported")
 
-        async with self.lock:
-            queue: asyncio.Queue[tuple[str | None, BaseException | None]] = asyncio.Queue()
-            loop = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(self.admission.acquire(), timeout=0.01)
+        except TimeoutError as exc:
+            raise ProviderBusyError("Generation queue is full; retry later") from exc
+        try:
+            async with self.lock:
+                self.model = model or "auto"
+                self.conversation_id = None
+                self.parent_message_id = None
+                queue: asyncio.Queue[tuple[str | None, BaseException | None]] = asyncio.Queue(maxsize=8)
+                loop = asyncio.get_running_loop()
+                stop_event = threading.Event()
 
-            def worker() -> None:
+                def worker() -> None:
+                    def enqueue(item: tuple[str | None, BaseException | None]) -> bool:
+                        future = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+                        while True:
+                            try:
+                                future.result(timeout=0.25)
+                                return True
+                            except FutureTimeoutError:
+                                if stop_event.is_set():
+                                    future.cancel()
+                                    return False
+
+                    try:
+                        for chunk in self._generate_sync(
+                            prompt,
+                            files=files,
+                            web_search=web_search,
+                            buffered=not realtime,
+                        ):
+                            if stop_event.is_set() or not enqueue((chunk, None)):
+                                return
+                        enqueue((None, None))
+                    except BaseException as exc:
+                        enqueue((None, exc))
+
+                task = asyncio.create_task(asyncio.to_thread(worker))
                 try:
-                    for chunk in self._generate_sync(prompt, files=files, web_search=web_search):
-                        asyncio.run_coroutine_threadsafe(queue.put((chunk, None)), loop).result()
-                    asyncio.run_coroutine_threadsafe(queue.put((None, None)), loop).result()
-                except BaseException as exc:
-                    asyncio.run_coroutine_threadsafe(queue.put((None, exc)), loop).result()
-
-            task = asyncio.create_task(asyncio.to_thread(worker))
-            while True:
-                chunk, error = await queue.get()
-                if error:
+                    while True:
+                        chunk, error = await queue.get()
+                        if error:
+                            await task
+                            raise error
+                        if chunk is None:
+                            break
+                        yield chunk
                     await task
-                    raise error
-                if chunk is None:
-                    break
-                yield chunk
-            await task
+                finally:
+                    stop_event.set()
+                    if not task.done():
+                        task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await task
+        finally:
+            self.admission.release()
 
-    async def fetch_models(self) -> list[Dict[str, Any]]:
+    async def fetch_models(self, *, refresh: bool = False) -> list[Dict[str, Any]]:
+        if (
+            not refresh
+            and self._models_cache is not None
+            and time.time() - self._models_cache_time < METADATA_CACHE_SECONDS
+        ):
+            return list(self._models_cache)
+
         def fetch() -> list[Dict[str, Any]]:
             assert self.session
             response = self.session.get(
@@ -686,7 +830,17 @@ class OpenAIProvider(BaseProvider):
                 raise ChatGPTSessionError(f"Model discovery failed with HTTP {response.status_code}")
             return (response.json() or {}).get("models", [])
 
-        return await asyncio.to_thread(fetch)
+        async with self.metadata_lock:
+            if (
+                not refresh
+                and self._models_cache is not None
+                and time.time() - self._models_cache_time < METADATA_CACHE_SECONDS
+            ):
+                return list(self._models_cache)
+            models = await asyncio.to_thread(fetch)
+            self._models_cache = models
+            self._models_cache_time = time.time()
+            return list(models)
 
     def runtime_status(self) -> dict[str, Any]:
         token_expiry = self._jwt_claims(self.access_token).get("exp")
@@ -702,6 +856,9 @@ class OpenAIProvider(BaseProvider):
             "transport": "curl-cffi",
             "browser_process": False,
             "max_concurrent_generations": 1,
+            "max_pending_generations": MAX_ADMITTED_GENERATIONS - 1,
+            "max_attachments": MAX_ATTACHMENTS,
+            "max_upload_bytes": MAX_UPLOAD_BYTES,
             "auth_mode": self.auth_mode,
             "initialized": bool(self.session and self.access_token and self.device_id),
             "uptime_seconds": int(time.time() - self.initialized_at),
@@ -713,10 +870,15 @@ class OpenAIProvider(BaseProvider):
             "proxy_capabilities": {
                 "text": True,
                 "streaming": True,
+                "realtime_text_streaming": False,
+                "canonical_buffered_streaming": True,
                 "ollama_compatibility": True,
                 "file_uploads": True,
                 "web_search": True,
                 "image_input": True,
+                "function_tools": False,
+                "canvas": False,
+                "image_generation": False,
             },
         }
 
@@ -793,11 +955,23 @@ class OpenAIProvider(BaseProvider):
         }
 
     async def fetch_account_details(self, *, refresh: bool = False) -> dict[str, Any]:
-        if not refresh and self._account_cache and time.time() - self._account_cache_time < 60:
+        if (
+            not refresh
+            and self._account_cache
+            and time.time() - self._account_cache_time < METADATA_CACHE_SECONDS
+        ):
             cached = dict(self._account_cache)
             cached["runtime"] = self.runtime_status()
             return cached
-        async with self.lock:
+        async with self.metadata_lock:
+            if (
+                not refresh
+                and self._account_cache
+                and time.time() - self._account_cache_time < METADATA_CACHE_SECONDS
+            ):
+                cached = dict(self._account_cache)
+                cached["runtime"] = self.runtime_status()
+                return cached
             details = await asyncio.to_thread(self._fetch_account_details_sync)
             self._account_cache = details
             self._account_cache_time = time.time()

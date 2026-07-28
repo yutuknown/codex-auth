@@ -13,6 +13,21 @@ from ..base import BaseProvider
 
 logger = logging.getLogger("codex_auth")
 
+
+async def low_memory_route(route):
+    request = route.request
+    if request.resource_type in {"font", "image", "media", "stylesheet"}:
+        await route.abort()
+        return
+
+    blocked_hosts = ("analytics", "datadog", "intercom", "segment", "sentry", "statsig")
+    if any(host in request.url.lower() for host in blocked_hosts):
+        await route.abort()
+        return
+
+    await route.continue_()
+
+
 class OpenAIProvider(BaseProvider):
     def __init__(self):
         self.context = None
@@ -34,9 +49,14 @@ class OpenAIProvider(BaseProvider):
             logger.error(f"[OpenAI] Error loading token: {e}")
             raise e
 
+        low_memory = os.environ.get("CODEX_AUTH_LOW_MEMORY", "false").lower() in {"1", "true", "yes"}
         self.context = await engine.browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            service_workers="block" if low_memory else "allow",
+            viewport={"width": 800, "height": 600} if low_memory else None,
         )
+        if low_memory:
+            await self.context.route("**/*", low_memory_route)
         await self.context.add_cookies([
             {
                 "name": "__Secure-next-auth.session-token",

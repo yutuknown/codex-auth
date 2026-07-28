@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from playwright.async_api import async_playwright
@@ -30,16 +31,25 @@ class PlaywrightEngine:
         """
         logger.info("[API] Starting Stealth Playwright Engine...")
         self.playwright = await async_playwright().start()
+        browser_args = [
+            "--disable-background-networking",
+            "--disable-dev-shm-usage",
+            "--disable-extensions",
+            "--disable-gpu",
+            "--disable-renderer-backgrounding",
+            "--renderer-process-limit=1",
+        ]
+        if os.environ.get("CODEX_AUTH_LOW_MEMORY", "false").lower() in {"1", "true", "yes"}:
+            browser_args.extend(
+                [
+                    "--js-flags=--max-old-space-size=128",
+                    "--no-zygote",
+                    "--single-process",
+                ]
+            )
         self.browser = await self.playwright.chromium.launch(
             headless=True,
-            args=[
-                "--disable-background-networking",
-                "--disable-dev-shm-usage",
-                "--disable-extensions",
-                "--disable-gpu",
-                "--disable-renderer-backgrounding",
-                "--renderer-process-limit=1",
-            ],
+            args=browser_args,
         )
         yield self
         

@@ -12,3 +12,5 @@ services:
         generateValue: true
       - key: CODEX_AUTH_OPEN_DASHBOARD
         value: "false"
+      - key: CODEX_AUTH_LOW_MEMORY
+        value: "true"

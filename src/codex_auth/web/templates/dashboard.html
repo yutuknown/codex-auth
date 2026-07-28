@@ -1157,11 +1157,13 @@
                     if (upstream.search) upstreamBadges.push(capabilityBadge('Search', '#34d399'));
                     if (upstream.canvas) upstreamBadges.push(capabilityBadge('Canvas', '#fbbf24'));
                     if (upstream.image_generation) upstreamBadges.push(capabilityBadge('Image gen', '#fb7185'));
-                    const proxyBadges = [
-                        capabilityBadge('Text', '#34d399'),
-                        capabilityBadge('Streaming', '#34d399'),
-                        capabilityBadge('No files/web', '#fbbf24')
-                    ];
+                    const proxy = m.proxy_capabilities || {};
+                    const proxyBadges = [];
+                    if (proxy.text) proxyBadges.push(capabilityBadge('Text', '#34d399'));
+                    if (proxy.streaming) proxyBadges.push(capabilityBadge('Streaming', '#34d399'));
+                    if (proxy.image_input) proxyBadges.push(capabilityBadge('Images', '#60a5fa'));
+                    if (proxy.file_uploads) proxyBadges.push(capabilityBadge('Files', '#c084fc'));
+                    if (proxy.web_search) proxyBadges.push(capabilityBadge('Web search', '#fbbf24'));
 
                     const tr = document.createElement('tr');
                     tr.innerHTML = `

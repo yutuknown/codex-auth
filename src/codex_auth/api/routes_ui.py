@@ -208,9 +208,9 @@ async def get_models_list():
             "proxy_capabilities": {
                 "text": True,
                 "streaming": True,
-                "image_input": False,
-                "file_uploads": False,
-                "web_search": False,
+                "image_input": True,
+                "file_uploads": True,
+                "web_search": True,
             },
         })
         

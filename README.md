@@ -44,8 +44,9 @@ SSE parser, so Chromium and Playwright are not required at runtime.
 - 📊 **Dashboard**: Browser login protects runtime logs, usage, and model status.
 - 📦 **CLI Tool**: Includes the `codex-auth` CLI built with Typer and Rich.
 
-HTTP-only mode currently supports text conversations. File uploads and web
-search return an explicit error.
+HTTP-only mode supports text, streaming, image/file attachments, and explicit
+web search without launching Chromium. Uploads accept data URLs, raw base64,
+or public HTTP(S) URLs up to 20 MB.
 
 ## 🚀 Getting Started
 

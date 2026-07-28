@@ -90,8 +90,17 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                 prompt += item.get("text", "") + "\n"
             elif item.get("type") in ["image_url", "file_url"]:
                 key = item.get("type")
-                file_url = item.get(key, {}).get("url", "")
-                files.append(file_url)
+                file_data = item.get(key, {})
+                if isinstance(file_data, str):
+                    files.append(file_data)
+                else:
+                    files.append(
+                        {
+                            "url": file_data.get("url", ""),
+                            "name": file_data.get("name") or item.get("name"),
+                            "mime_type": file_data.get("mime_type") or item.get("mime_type"),
+                        }
+                    )
     
     prompt = prompt.strip()
     

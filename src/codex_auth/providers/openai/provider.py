@@ -1,13 +1,20 @@
 import asyncio
 import base64
+import binascii
 import hashlib
+import ipaddress
 import json
 import logging
+import mimetypes
 import os
 import random
+import socket
+import struct
 import time
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Iterable
 
 from curl_cffi.requests import Session
@@ -24,10 +31,55 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 class ChatGPTSessionError(RuntimeError):
     pass
+
+
+def _image_dimensions(data: bytes, mime_type: str) -> tuple[int, int]:
+    if mime_type == "image/png" and len(data) >= 24 and data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return struct.unpack(">II", data[16:24])
+    if mime_type == "image/gif" and len(data) >= 10 and data[:6] in {b"GIF87a", b"GIF89a"}:
+        return struct.unpack("<HH", data[6:10])
+    if mime_type == "image/jpeg" and data.startswith(b"\xff\xd8"):
+        offset = 2
+        while offset + 9 < len(data):
+            if data[offset] != 0xFF:
+                offset += 1
+                continue
+            marker = data[offset + 1]
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
+                return struct.unpack(">HH", data[offset + 5 : offset + 9])[::-1]
+            if marker in {0xD8, 0xD9}:
+                offset += 2
+                continue
+            segment_length = int.from_bytes(data[offset + 2 : offset + 4], "big")
+            if segment_length < 2:
+                break
+            offset += 2 + segment_length
+    return 0, 0
+
+
+def _sniff_mime_type(data: bytes, declared: str | None = None) -> str:
+    declared = (declared or "").split(";", 1)[0].strip().lower()
+    if declared and declared != "application/octet-stream":
+        return declared
+    signatures = (
+        (b"\x89PNG\r\n\x1a\n", "image/png"),
+        (b"\xff\xd8\xff", "image/jpeg"),
+        (b"GIF87a", "image/gif"),
+        (b"GIF89a", "image/gif"),
+        (b"RIFF", "image/webp"),
+        (b"%PDF-", "application/pdf"),
+    )
+    for signature, mime_type in signatures:
+        if data.startswith(signature):
+            return mime_type
+    if b"\x00" not in data[:1024]:
+        return "text/plain"
+    return "application/octet-stream"
 
 
 def parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
@@ -267,12 +319,216 @@ class OpenAIProvider(BaseProvider):
         data = response.json()
         return data["token"], _proof_token(data.get("proofofwork") or {})
 
+    @staticmethod
+    def _validate_remote_file_url(url: str) -> None:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ChatGPTSessionError("File URL must be a public HTTP or HTTPS URL")
+        try:
+            addresses = {
+                item[4][0]
+                for item in socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+            }
+        except socket.gaierror as exc:
+            raise ChatGPTSessionError("File URL hostname could not be resolved") from exc
+        if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+            raise ChatGPTSessionError("File URL must not resolve to a private or local address")
+
+    def _download_remote_file(self, url: str) -> tuple[bytes, str | None, str]:
+        download_session = Session(impersonate="chrome")
+        current_url = url
+        try:
+            for _ in range(4):
+                self._validate_remote_file_url(current_url)
+                response = download_session.get(current_url, stream=True, allow_redirects=False, timeout=30)
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    response.close()
+                    if not location:
+                        raise ChatGPTSessionError("File URL redirect did not include a destination")
+                    current_url = urllib.parse.urljoin(current_url, location)
+                    continue
+                if response.status_code != 200:
+                    response.close()
+                    raise ChatGPTSessionError(f"File URL returned HTTP {response.status_code}")
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > MAX_UPLOAD_BYTES:
+                    response.close()
+                    raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
+                chunks = []
+                total = 0
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    total += len(chunk)
+                    if total > MAX_UPLOAD_BYTES:
+                        response.close()
+                        raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
+                    chunks.append(chunk)
+                mime_type = response.headers.get("content-type")
+                response.close()
+                name = Path(urllib.parse.unquote(urllib.parse.urlparse(current_url).path)).name
+                return b"".join(chunks), mime_type, name
+            raise ChatGPTSessionError("File URL followed too many redirects")
+        finally:
+            download_session.close()
+
+    def _decode_input_file(self, source: Any, index: int) -> tuple[bytes, str, str]:
+        name = ""
+        declared_mime = None
+        if isinstance(source, dict):
+            name = str(source.get("name") or "")
+            declared_mime = source.get("mime_type")
+            source = source.get("url") or ""
+        if not isinstance(source, str) or not source:
+            raise ChatGPTSessionError("Image or file input is missing its URL or data")
+
+        if source.startswith("data:"):
+            header, separator, encoded = source.partition(",")
+            if not separator:
+                raise ChatGPTSessionError("Invalid data URL")
+            media_header = header[5:]
+            declared_mime = media_header.split(";", 1)[0] or declared_mime
+            try:
+                if ";base64" in media_header.lower():
+                    data = base64.b64decode(encoded, validate=True)
+                else:
+                    data = urllib.parse.unquote_to_bytes(encoded)
+            except (binascii.Error, ValueError) as exc:
+                raise ChatGPTSessionError("Invalid base64 file data") from exc
+        elif source.startswith(("http://", "https://")):
+            data, response_mime, response_name = self._download_remote_file(source)
+            declared_mime = declared_mime or response_mime
+            name = name or response_name
+        else:
+            try:
+                data = base64.b64decode(source, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ChatGPTSessionError(
+                    "File input must be a data URL, public HTTP(S) URL, or raw base64"
+                ) from exc
+
+        if not data:
+            raise ChatGPTSessionError("Uploaded file is empty")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise ChatGPTSessionError("File exceeds the 20 MB upload limit")
+        mime_type = _sniff_mime_type(data, declared_mime)
+        extension = mimetypes.guess_extension(mime_type) or ""
+        safe_name = Path(name).name[:128] if name else f"upload-{index}{extension}"
+        return data, mime_type, safe_name
+
+    def _upload_file(self, source: Any, index: int) -> dict[str, Any]:
+        assert self.session
+        data, mime_type, file_name = self._decode_input_file(source, index)
+        width, height = _image_dimensions(data, mime_type)
+        use_case = "multimodal" if mime_type.startswith("image/") else "my_files"
+        create_body: dict[str, Any] = {
+            "file_name": file_name,
+            "file_size": len(data),
+            "use_case": use_case,
+        }
+        if width and height:
+            create_body.update({"width": width, "height": height})
+
+        create_response = self.session.post(
+            BASE_URL + "/backend-api/files",
+            headers=self._headers("/backend-api/files", accept="application/json"),
+            json=create_body,
+            timeout=30,
+        )
+        if create_response.status_code != 200:
+            raise ChatGPTSessionError(f"File registration failed with HTTP {create_response.status_code}")
+        created = create_response.json() or {}
+        file_id = created.get("file_id")
+        upload_url = created.get("upload_url")
+        if not file_id or not upload_url:
+            raise ChatGPTSessionError("File registration did not return an upload destination")
+
+        time.sleep(0.5)
+        upload_session = Session(impersonate="chrome")
+        try:
+            upload_response = upload_session.put(
+                upload_url,
+                headers={
+                    "Content-Type": mime_type,
+                    "x-ms-blob-type": "BlockBlob",
+                    "x-ms-version": "2020-04-08",
+                    "Origin": BASE_URL,
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "en-US,en;q=0.8",
+                    "Referer": BASE_URL + "/",
+                },
+                data=data,
+                timeout=60,
+            )
+        finally:
+            upload_session.close()
+        if upload_response.status_code not in {200, 201}:
+            raise ChatGPTSessionError(f"File blob upload failed with HTTP {upload_response.status_code}")
+
+        uploaded_response = self.session.post(
+            BASE_URL + f"/backend-api/files/{file_id}/uploaded",
+            headers=self._headers(f"/backend-api/files/{file_id}/uploaded", accept="application/json"),
+            json={},
+            timeout=30,
+        )
+        if uploaded_response.status_code != 200:
+            raise ChatGPTSessionError(f"File finalization failed with HTTP {uploaded_response.status_code}")
+        return {
+            "id": file_id,
+            "mime_type": mime_type,
+            "name": file_name,
+            "size": len(data),
+            "width": width,
+            "height": height,
+            "is_image": mime_type.startswith("image/"),
+        }
+
+    @staticmethod
+    def _user_message(prompt: str, message_id: str, uploads: list[dict[str, Any]]) -> dict[str, Any]:
+        attachments = []
+        image_parts = []
+        for upload in uploads:
+            attachment = {
+                "id": upload["id"],
+                "mimeType": upload["mime_type"],
+                "name": upload["name"],
+                "size": upload["size"],
+            }
+            if upload["width"] and upload["height"]:
+                attachment.update({"width": upload["width"], "height": upload["height"]})
+            attachments.append(attachment)
+            if upload["is_image"]:
+                image_parts.append(
+                    {
+                        "content_type": "image_asset_pointer",
+                        "asset_pointer": f"file-service://{upload['id']}",
+                        "size_bytes": upload["size"],
+                        "width": upload["width"],
+                        "height": upload["height"],
+                    }
+                )
+        content = (
+            {"content_type": "multimodal_text", "parts": [*image_parts, prompt]}
+            if image_parts
+            else {"content_type": "text", "parts": [prompt]}
+        )
+        metadata: dict[str, Any] = {"serialization_metadata": {"custom_symbol_offsets": []}}
+        if attachments:
+            metadata["attachments"] = attachments
+        return {
+            "id": message_id,
+            "author": {"role": "user"},
+            "create_time": time.time(),
+            "content": content,
+            "metadata": metadata,
+        }
+
     def _prepare(
         self,
-        prompt: str,
-        message_id: str,
+        user_message: dict[str, Any],
         chat_token: str,
         proof_token: str | None,
+        web_search: bool,
     ) -> str:
         assert self.session and self.conversation_id and self.parent_message_id
         headers = self._headers("/backend-api/f/conversation/prepare")
@@ -290,14 +546,17 @@ class OpenAIProvider(BaseProvider):
             "timezone": "Asia/Calcutta",
             "conversation_mode": {"kind": "primary_assistant"},
             "partial_query": {
-                "id": message_id,
-                "author": {"role": "user"},
-                "content": {"content_type": "text", "parts": [prompt]},
+                "id": user_message["id"],
+                "author": user_message["author"],
+                "content": user_message["content"],
+                "metadata": user_message["metadata"],
             },
             "supports_buffering": True,
             "supported_encodings": ["v1"],
             "client_contextual_info": {"app_name": "chatgpt.com"},
         }
+        if web_search:
+            payload["force_use_tool"] = "web"
         response = self.session.post(
             BASE_URL + "/backend-api/f/conversation/prepare",
             headers=headers,
@@ -311,10 +570,17 @@ class OpenAIProvider(BaseProvider):
             raise ChatGPTSessionError("Conversation prepare did not return a conduit token")
         return conduit
 
-    def _generate_sync(self, prompt: str) -> Iterable[str]:
+    def _generate_sync(
+        self,
+        prompt: str,
+        files: list[Any] | None = None,
+        web_search: bool = False,
+    ) -> Iterable[str]:
         assert self.session
         message_id = str(uuid.uuid4())
         parent_id = self.parent_message_id or str(uuid.uuid4())
+        uploads = [self._upload_file(source, index) for index, source in enumerate(files or [], 1)]
+        user_message = self._user_message(prompt, message_id, uploads)
         is_continuation = bool(self.conversation_id and self.parent_message_id)
         target = "/backend-api/f/conversation" if is_continuation else "/backend-api/conversation"
         chat_token, proof_token = self._chat_requirements()
@@ -324,19 +590,11 @@ class OpenAIProvider(BaseProvider):
             headers["openai-sentinel-proof-token"] = proof_token
         client_prepare_state = None
         if is_continuation:
-            headers["x-conduit-token"] = self._prepare(prompt, message_id, chat_token, proof_token)
+            headers["x-conduit-token"] = self._prepare(user_message, chat_token, proof_token, web_search)
             client_prepare_state = "sent"
         payload = {
             "action": "next",
-            "messages": [
-                {
-                    "id": message_id,
-                    "author": {"role": "user"},
-                    "create_time": time.time(),
-                    "content": {"content_type": "text", "parts": [prompt]},
-                    "metadata": {"serialization_metadata": {"custom_symbol_offsets": []}},
-                }
-            ],
+            "messages": [user_message],
             "conversation_id": self.conversation_id,
             "parent_message_id": parent_id,
             "model": self.model,
@@ -348,6 +606,8 @@ class OpenAIProvider(BaseProvider):
             "supported_encodings": ["v1"],
             "client_contextual_info": {"app_name": "chatgpt.com"},
         }
+        if web_search:
+            payload["force_use_tool"] = "web"
         if client_prepare_state:
             payload["client_prepare_state"] = client_prepare_state
         response = self.session.post(
@@ -388,12 +648,8 @@ class OpenAIProvider(BaseProvider):
         files: list | None = None,
         web_search: bool = False,
     ) -> AsyncGenerator[str, None]:
-        if files:
-            raise ChatGPTSessionError("HTTP-only mode does not yet support file uploads")
-        if web_search:
-            raise ChatGPTSessionError("HTTP-only mode does not yet support web search")
-        if not prompt:
-            raise ChatGPTSessionError("Prompt cannot be empty")
+        if not prompt and not files:
+            raise ChatGPTSessionError("Prompt and file input cannot both be empty")
 
         async with self.lock:
             queue: asyncio.Queue[tuple[str | None, BaseException | None]] = asyncio.Queue()
@@ -401,7 +657,7 @@ class OpenAIProvider(BaseProvider):
 
             def worker() -> None:
                 try:
-                    for chunk in self._generate_sync(prompt):
+                    for chunk in self._generate_sync(prompt, files=files, web_search=web_search):
                         asyncio.run_coroutine_threadsafe(queue.put((chunk, None)), loop).result()
                     asyncio.run_coroutine_threadsafe(queue.put((None, None)), loop).result()
                 except BaseException as exc:
@@ -458,9 +714,9 @@ class OpenAIProvider(BaseProvider):
                 "text": True,
                 "streaming": True,
                 "ollama_compatibility": True,
-                "file_uploads": False,
-                "web_search": False,
-                "image_input": False,
+                "file_uploads": True,
+                "web_search": True,
+                "image_input": True,
             },
         }
 

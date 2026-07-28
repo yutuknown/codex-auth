@@ -1,6 +1,11 @@
 import pytest
 
-from codex_auth.providers.openai.provider import OpenAIProvider, _message_delta, parse_netscape_cookies
+from codex_auth.providers.openai.provider import (
+    ChatGPTSessionError,
+    OpenAIProvider,
+    _message_delta,
+    parse_netscape_cookies,
+)
 
 
 def test_parse_netscape_cookie_and_http_only_prefix():
@@ -112,4 +117,58 @@ def test_runtime_status_distinguishes_proxy_from_upstream_capabilities():
     assert status["browser_process"] is False
     assert status["max_concurrent_generations"] == 1
     assert status["proxy_capabilities"]["streaming"] is True
-    assert status["proxy_capabilities"]["file_uploads"] is False
+    assert status["proxy_capabilities"]["image_input"] is True
+    assert status["proxy_capabilities"]["file_uploads"] is True
+    assert status["proxy_capabilities"]["web_search"] is True
+
+
+def test_decode_data_url_and_build_multimodal_message():
+    provider = OpenAIProvider()
+    png = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZFlAAAAAASUVORK5CYII="
+    )
+
+    data, mime_type, name = provider._decode_input_file({"url": png, "name": "pixel.png"}, 1)
+    upload = {
+        "id": "file_test",
+        "mime_type": mime_type,
+        "name": name,
+        "size": len(data),
+        "width": 1,
+        "height": 1,
+        "is_image": True,
+    }
+    message = provider._user_message("Describe it", "message-id", [upload])
+
+    assert mime_type == "image/png"
+    assert name == "pixel.png"
+    assert message["content"]["content_type"] == "multimodal_text"
+    assert message["content"]["parts"][0]["asset_pointer"] == "file-service://file_test"
+    assert message["metadata"]["attachments"][0]["mimeType"] == "image/png"
+
+
+def test_build_document_message_uses_attachment_metadata_without_image_pointer():
+    message = OpenAIProvider._user_message(
+        "Summarize it",
+        "message-id",
+        [
+            {
+                "id": "file_document",
+                "mime_type": "application/pdf",
+                "name": "report.pdf",
+                "size": 42,
+                "width": 0,
+                "height": 0,
+                "is_image": False,
+            }
+        ],
+    )
+
+    assert message["content"] == {"content_type": "text", "parts": ["Summarize it"]}
+    assert message["metadata"]["attachments"][0]["id"] == "file_document"
+
+
+def test_remote_file_url_rejects_private_network_targets():
+    with pytest.raises(ChatGPTSessionError, match="private or local"):
+        OpenAIProvider._validate_remote_file_url("http://127.0.0.1/private.txt")

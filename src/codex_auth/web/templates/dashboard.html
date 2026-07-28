@@ -763,6 +763,7 @@
                             <div class="detail-item"><label>Workspace</label><div id="account-structure">-</div></div>
                             <div class="detail-item"><label>Compute Residency</label><div id="account-residency">-</div></div>
                         </div>
+                        <div class="warning-note" id="account-warning" style="display:none; margin:0 0 24px 0;"></div>
                         
                         <div style="background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 16px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -1201,6 +1202,11 @@
                 const runtime = data.runtime || {};
                 const token = runtime.access_token || {};
                 const cookie = runtime.session_cookie || {};
+                const accountWarnings = Array.isArray(data.warnings) ? data.warnings : [];
+                const accountWarning = document.getElementById('account-warning');
+
+                accountWarning.textContent = accountWarnings.join(' · ');
+                accountWarning.style.display = accountWarnings.length ? 'block' : 'none';
 
                 document.getElementById('account-name').textContent = profile.name || 'Authenticated Account';
                 document.getElementById('account-email').textContent = profile.email || 'Email not reported';
@@ -1257,6 +1263,9 @@
                 authStatus.className = 'status-badge error';
                 authStatus.textContent = '● Account API Error';
                 document.getElementById('account-email').textContent = error.message;
+                const accountWarning = document.getElementById('account-warning');
+                accountWarning.textContent = error.message;
+                accountWarning.style.display = 'block';
             }
         }
 

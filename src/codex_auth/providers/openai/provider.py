@@ -974,20 +974,24 @@ class OpenAIProvider(BaseProvider):
             headers=self._headers("/backend-api/settings/user"),
             timeout=30,
         )
-        failures = [
-            response.status_code
-            for response in (account_response, me_response, settings_response)
-            if response.status_code != 200
-        ]
-        if failures:
-            raise ChatGPTSessionError(f"Account discovery failed with HTTP {failures[0]}")
+        endpoint_status = {
+            "account": account_response.status_code,
+            "profile": me_response.status_code,
+            "settings": settings_response.status_code,
+        }
+        if account_response.status_code != 200 and me_response.status_code != 200:
+            raise ChatGPTSessionError(
+                f"Account discovery failed with HTTP {account_response.status_code}/{me_response.status_code}"
+            )
 
-        account_data = (account_response.json() or {}).get("accounts", {}).get("default", {})
+        account_payload = account_response.json() if account_response.status_code == 200 else {}
+        profile = me_response.json() if me_response.status_code == 200 else {}
+        settings_payload = settings_response.json() if settings_response.status_code == 200 else {}
+        account_data = (account_payload or {}).get("accounts", {}).get("default", {})
         account = account_data.get("account") or {}
         entitlement = account_data.get("entitlement") or {}
         subscription = account_data.get("last_active_subscription") or {}
-        profile = me_response.json() or {}
-        user_settings = (settings_response.json() or {}).get("settings") or {}
+        user_settings = (settings_payload or {}).get("settings") or {}
         return {
             "profile": {
                 "name": profile.get("name") or profile.get("first_name"),
@@ -1024,6 +1028,12 @@ class OpenAIProvider(BaseProvider):
             },
             "feature_count": len(account_data.get("features") or []),
             "can_access_with_session": bool(account_data.get("can_access_with_session")),
+            "endpoint_status": endpoint_status,
+            "warnings": [
+                f"{name} endpoint returned HTTP {status}"
+                for name, status in endpoint_status.items()
+                if status != 200
+            ],
             "runtime": self.runtime_status(),
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }

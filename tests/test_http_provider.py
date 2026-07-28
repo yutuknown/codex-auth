@@ -282,3 +282,45 @@ def test_authenticated_request_falls_back_to_cookie_only_when_refresh_is_stale()
     assert response.status_code == 200
     assert provider.auth_mode == "cookie_only"
     assert provider.session.authorization_headers == ["Bearer stale-token", None]
+
+
+def test_account_discovery_keeps_profile_when_optional_settings_are_unauthorized(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, body=None):
+            self.status_code = status_code
+            self._body = body or {}
+
+        def json(self):
+            return self._body
+
+    responses = {
+        "/backend-api/accounts/check/v4-2023-04-27": FakeResponse(
+            200,
+            {
+                "accounts": {
+                    "default": {
+                        "account": {"plan_type": "free"},
+                        "features": ["feature-a"],
+                        "can_access_with_session": True,
+                    }
+                }
+            },
+        ),
+        "/backend-api/me": FakeResponse(200, {"email": "user@example.com"}),
+        "/backend-api/settings/user": FakeResponse(401),
+    }
+    provider = OpenAIProvider()
+    provider.session = object()
+    monkeypatch.setattr(
+        provider,
+        "_authenticated_request",
+        lambda method, target, **kwargs: responses[target],
+    )
+
+    details = provider._fetch_account_details_sync()
+
+    assert details["profile"]["email"] == "user@example.com"
+    assert details["account"]["plan_type"] == "free"
+    assert details["feature_count"] == 1
+    assert details["endpoint_status"]["settings"] == 401
+    assert details["warnings"] == ["settings endpoint returned HTTP 401"]

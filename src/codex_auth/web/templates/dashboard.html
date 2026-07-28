@@ -736,7 +736,7 @@
             <div id="models-view" class="view">
                 <div class="header">
                     <h1>Upstream Model Catalog</h1>
-                    <p>ChatGPT-advertised model features are shown separately from capabilities implemented and tested by this proxy.</p>
+                    <p>Live account-visible models from ChatGPT and Microsoft 365, separated from capabilities actually implemented by this proxy.</p>
                 </div>
                 <div class="bento-grid">
                     <div class="bento-card col-4">
@@ -747,17 +747,29 @@
                     <div class="bento-card col-4">
                         <h3>Default Route</h3>
                         <div class="metric mono" id="catalog-default-model">-</div>
-                        <div class="sub-metric">Reported by the web session</div>
+                        <div class="sub-metric" id="catalog-source">Loading provider catalogs</div>
                     </div>
                     <div class="bento-card col-4">
                         <h3>Proxy Transport</h3>
-                        <div class="metric mono">HTTP</div>
+                        <div class="metric mono">HTTP + WS</div>
                         <div class="sub-metric">curl-cffi · no Chromium</div>
+                    </div>
+                    <div class="bento-card col-12" style="display:flex;align-items:end;gap:12px;flex-wrap:wrap;">
+                        <div style="min-width:240px;flex:1;">
+                            <label for="catalog-provider" class="account-health-title" style="display:block;margin-bottom:8px;">Catalog provider</label>
+                            <select id="catalog-provider" class="cookie-secondary-button" style="width:100%;justify-content:flex-start;" onchange="fetchModels()">
+                                <option value="">All configured providers</option>
+                                <option value="openai-web">ChatGPT Web</option>
+                                <option value="m365-copilot">Microsoft 365 Copilot Chat</option>
+                            </select>
+                        </div>
+                        <button id="catalog-refresh-button" class="cookie-submit-button" type="button" onclick="fetchModels(true)">Refresh upstream catalog</button>
                     </div>
                     <div class="bento-card col-12">
                         <table>
                             <thead>
                                 <tr>
+                                    <th>Provider</th>
                                     <th>Model</th>
                                     <th>Reasoning</th>
                                     <th>Max Tokens</th>
@@ -781,6 +793,30 @@
                 </div>
                 
                 <div class="bento-grid">
+                    <div class="bento-card col-12">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;">
+                            <div>
+                                <h3 style="margin:0 0 6px;">Provider Registry</h3>
+                                <p style="margin:0;color:var(--text-secondary);font-size:13px;line-height:1.5;">
+                                    Implemented capabilities are separate from planned upstream targets.
+                                </p>
+                            </div>
+                            <span class="status-badge" id="default-provider-badge">Default: loading</span>
+                        </div>
+                        <table style="margin-top:18px;">
+                            <thead>
+                                <tr>
+                                    <th>Provider</th>
+                                    <th>State</th>
+                                    <th>Authentication</th>
+                                    <th>Implemented</th>
+                                    <th>Target</th>
+                                </tr>
+                            </thead>
+                            <tbody id="provider-registry-body"></tbody>
+                        </table>
+                    </div>
+
                     <div class="bento-card col-12">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
                             <div>
@@ -831,15 +867,22 @@
                             <div>
                                 <h3 style="margin:0 0 6px;">Update Session Cookies</h3>
                                 <p style="margin:0;color:var(--text-secondary);font-size:13px;line-height:1.5;">
-                                    Paste a Netscape HTTP Cookie File export or choose a local <span class="font-mono">cookies.txt</span>.
+                                    Paste a Netscape HTTP Cookie File export or choose a local file. Microsoft 365 activation also refreshes its account-visible model catalog.
                                 </p>
                             </div>
                             <span class="status-badge warning">Sensitive credential</span>
                         </div>
+                        <div style="margin-top:18px;max-width:420px;">
+                            <label for="cookie-provider" class="account-health-title" style="display:block;margin-bottom:8px;">Provider</label>
+                            <select id="cookie-provider" class="cookie-secondary-button" style="width:100%;justify-content:flex-start;">
+                                <option value="openai-web">ChatGPT Web</option>
+                                <option value="m365-copilot">Microsoft 365 Copilot Chat</option>
+                            </select>
+                        </div>
                         <div class="cookie-update-layout">
                             <div>
                                 <label for="cookie-paste" class="account-health-title" style="display:block;margin-bottom:8px;">Paste Netscape cookie text</label>
-                                <textarea id="cookie-paste" class="cookie-textarea" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="# Netscape HTTP Cookie File&#10;.chatgpt.com    TRUE    /    TRUE    ..."></textarea>
+                                <textarea id="cookie-paste" class="cookie-textarea" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="# Netscape HTTP Cookie File&#10;.m365.cloud.microsoft    TRUE    /    TRUE    ..."></textarea>
                                 <div class="cookie-update-actions">
                                     <button id="cookie-submit-button" class="cookie-submit-button" type="button" onclick="submitCookieUpdate()">Validate &amp; activate</button>
                                     <button id="cookie-reveal-button" class="cookie-secondary-button" type="button" onclick="toggleCookieVisibility()">Reveal pasted text</button>
@@ -856,7 +899,7 @@
                         <div id="cookie-update-result" class="cookie-update-result" role="status" aria-live="polite"></div>
                         <p class="cookie-security-note">
                             Cookie values are never returned by the API or written to request logs. Activation is immediate.
-                            On Render, update <span class="font-mono">CODEX_AUTH_COOKIES</span> too if the replacement must survive a restart or redeploy.
+                            On Render, persist the matching <span class="font-mono">CODEX_AUTH_COOKIES</span> or <span class="font-mono">CODEX_AUTH_M365_COOKIES</span> secret if the replacement must survive a restart.
                         </p>
                     </div>
                     
@@ -1395,15 +1438,36 @@
         }
 
         // Models List
-        async function fetchModels() {
+        async function fetchModels(refresh = false) {
+            const refreshButton = document.getElementById('catalog-refresh-button');
             try {
-                const res = await fetch('/api/models_list');
-                if (!res.ok) return;
-                const data = await res.json();
+                const params = new URLSearchParams();
+                const provider = document.getElementById('catalog-provider')?.value || '';
+                if (provider) params.set('provider', provider);
+                if (refresh) params.set('refresh', 'true');
+                if (refreshButton) {
+                    refreshButton.disabled = true;
+                    refreshButton.textContent = refresh ? 'Refreshing upstream...' : 'Loading catalog...';
+                }
+                const res = await fetch(`/api/models_list?${params.toString()}`);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    const detail = data.detail || {};
+                    throw new Error(detail.message || `Model catalog returned HTTP ${res.status}`);
+                }
                 const tbody = document.getElementById('models-list-body');
                 tbody.innerHTML = '';
                 document.getElementById('catalog-model-count').textContent = data.model_count ?? data.models.length;
-                document.getElementById('catalog-default-model').textContent = data.default_model || 'auto';
+                document.getElementById('catalog-default-model').textContent =
+                    data.default_model || `${data.default_provider || 'openai-web'}:auto`;
+                const sourceEntries = Object.entries(data.sources || {});
+                const sourceText = sourceEntries.length
+                    ? sourceEntries.map(([name, source]) => `${name}: ${source}`).join(' · ')
+                    : 'No configured provider catalog';
+                const errors = Array.isArray(data.errors) ? data.errors : [];
+                document.getElementById('catalog-source').textContent = errors.length
+                    ? `${sourceText} · ${errors.length} provider error`
+                    : sourceText;
 
                 data.models.forEach(m => {
                     const upstream = m.upstream_capabilities || {};
@@ -1424,6 +1488,7 @@
 
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
+                        <td><div style="font-weight:600">${escapeHtml(m.provider)}</div><div class="font-mono" style="color:var(--text-secondary);font-size:11px;margin-top:4px">${escapeHtml(m.upstream_id || 'service catalog')}</div></td>
                         <td><div style="font-weight:600">${escapeHtml(m.title || m.id)}</div><div class="font-mono" style="color:var(--text-secondary);font-size:11px;margin-top:4px">${escapeHtml(m.id)}</div></td>
                         <td><span class="badge">${escapeHtml(m.reasoning_type || 'none')}</span></td>
                         <td class="font-mono">${m.context_length.toLocaleString()}</td>
@@ -1432,7 +1497,19 @@
                     `;
                     tbody.appendChild(tr);
                 });
-            } catch (e) {}
+                if (!data.models.length) {
+                    const row = document.createElement('tr');
+                    row.innerHTML = '<td colspan="6" style="color:var(--text-secondary);padding:24px;">No configured provider returned a model catalog.</td>';
+                    tbody.appendChild(row);
+                }
+            } catch (error) {
+                document.getElementById('catalog-source').textContent = error.message;
+            } finally {
+                if (refreshButton) {
+                    refreshButton.disabled = false;
+                    refreshButton.textContent = 'Refresh upstream catalog';
+                }
+            }
         }
 
         let pendingCookieFileText = null;
@@ -1491,8 +1568,9 @@
             }
             button.disabled = true;
             button.textContent = 'Validating session...';
+            const selectedProvider = document.getElementById('cookie-provider').value;
             showCookieUpdateResult(
-                'Validating the replacement against ChatGPT before changing the active session.',
+                `Validating the replacement against ${selectedProvider === 'm365-copilot' ? 'Microsoft 365 Copilot' : 'ChatGPT'} before changing the active session.`,
                 'success',
             );
             try {
@@ -1502,6 +1580,7 @@
                     body: JSON.stringify({
                         cookies: cookieText,
                         source_name: pendingCookieFileName || 'pasted-text',
+                        provider: selectedProvider,
                     }),
                 });
                 const data = await response.json().catch(() => ({}));
@@ -1509,13 +1588,15 @@
                     const detail = data.detail || {};
                     throw new Error(detail.message || data.message || `Cookie update returned HTTP ${response.status}`);
                 }
-                const plan = friendlyPlan(data.account && data.account.plan_type);
                 const persistence = data.persistence || {};
                 const persistenceText = persistence.warning
                     ? ` ${persistence.warning}.`
                     : ' The protected cookie file was updated for future starts.';
+                const readinessText = data.generation_ready === false
+                    ? ' Web session is valid; generation still needs a current Copilot bearer or refresh configuration.'
+                    : '';
                 showCookieUpdateResult(
-                    `Session activated with ${data.cookie_count} cookies · ${plan} · ${data.auth_mode}.${persistenceText}`,
+                    `${data.provider} session activated with ${data.cookie_count} cookies · ${data.model_count || 0} models · ${data.auth_mode}.${readinessText}${persistenceText}`,
                     'success',
                 );
                 textarea.value = '';
@@ -1544,6 +1625,65 @@
         });
 
         // Real account and entitlement data
+        function capabilityNames(capabilities) {
+            const labels = {
+                text: 'Text',
+                streaming: 'Streaming',
+                image_input: 'Images',
+                file_input: 'Files',
+                web_search: 'Web search',
+                tools: 'Tools',
+                image_generation: 'Image gen',
+            };
+            return Object.entries(capabilities || {})
+                .filter(([, enabled]) => enabled)
+                .map(([name]) => labels[name] || name);
+        }
+
+        async function fetchProviders() {
+            try {
+                const res = await fetch('/api/providers');
+                if (!res.ok) return;
+                const data = await res.json();
+                document.getElementById('default-provider-badge').textContent =
+                    `Default: ${data.default_provider}`;
+                const tbody = document.getElementById('provider-registry-body');
+                tbody.replaceChildren();
+                data.providers.forEach(provider => {
+                    const runtime = provider.runtime || {};
+                    const implemented = capabilityNames(
+                        provider.effective_capabilities || provider.capabilities
+                    );
+                    const targets = capabilityNames(provider.target_capabilities);
+                    const state = runtime.initialized
+                        ? 'Active'
+                        : provider.implementation_state === 'scaffolded'
+                            ? 'Scaffolded'
+                            : runtime.configured
+                                ? 'Configured'
+                                : 'Not configured';
+                    const stateClass = runtime.initialized
+                        ? 'online'
+                        : provider.implementation_state === 'scaffolded'
+                            ? 'warning'
+                            : '';
+                    const runtimeDetails = [];
+                    if (runtime.generation_ready === false) runtimeDetails.push('generation bearer required');
+                    if (runtime.model_count) runtimeDetails.push(`${runtime.model_count} live models`);
+                    if (runtime.model_catalog_source) runtimeDetails.push(runtime.model_catalog_source);
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td><div style="font-weight:600">${escapeHtml(provider.display_name)}</div><div class="font-mono" style="color:var(--text-secondary);font-size:11px;margin-top:4px">${escapeHtml(provider.id)}</div></td>
+                        <td><span class="status-badge ${stateClass}">${escapeHtml(state)}</span><div style="color:var(--text-secondary);font-size:11px;margin-top:7px">${escapeHtml(runtimeDetails.join(' · '))}</div></td>
+                        <td>${escapeHtml(provider.auth_kind || 'Not defined')}<div class="font-mono" style="color:var(--text-secondary);font-size:11px;margin-top:4px">${escapeHtml(runtime.auth_mode || '')}</div></td>
+                        <td><div class="capability-list">${implemented.map(name => capabilityBadge(name, '#34d399')).join('') || capabilityBadge('None', '#a1a1aa')}</div></td>
+                        <td><div class="capability-list">${targets.map(name => capabilityBadge(name, '#60a5fa')).join('') || capabilityBadge('Same as implemented', '#a1a1aa')}</div></td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (e) {}
+        }
+
         async function fetchAccount() {
             try {
                 const res = await fetch('/api/account');
@@ -1692,12 +1832,14 @@
         fetchLogs();
         fetchUsage();
         fetchModels();
+        fetchProviders();
         fetchStatus();
         fetchAccount();
         
         setInterval(() => { if (!document.hidden) fetchLogs(); }, 1000);
         setInterval(() => { if (!document.hidden) fetchUsage(); }, 3000);
         setInterval(() => { if (!document.hidden) fetchModels(); }, 300000);
+        setInterval(() => { if (!document.hidden) fetchProviders(); }, 30000);
         setInterval(() => { if (!document.hidden) fetchStatus(); }, 30000);
         setInterval(() => { if (!document.hidden) fetchAccount(); }, 300000);
 

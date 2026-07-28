@@ -1,8 +1,47 @@
 from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass
 from typing import Any, AsyncGenerator, Dict
 
 
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    text: bool = False
+    streaming: bool = False
+    image_input: bool = False
+    file_input: bool = False
+    web_search: bool = False
+    tools: bool = False
+    image_generation: bool = False
+
+    def to_dict(self) -> dict[str, bool]:
+        return asdict(self)
+
+
 class BaseProvider(ABC):
+    provider_id = "unknown"
+    display_name = "Unknown provider"
+    auth_kind = "unknown"
+    capabilities = ProviderCapabilities()
+
+    def descriptor(self) -> dict[str, Any]:
+        return {
+            "id": self.provider_id,
+            "display_name": self.display_name,
+            "auth_kind": self.auth_kind,
+            "capabilities": self.capabilities.to_dict(),
+        }
+
+    def is_configured(self) -> bool:
+        return True
+
+    def runtime_status(self) -> dict[str, Any]:
+        return {
+            "initialized": False,
+            "configured": self.is_configured(),
+            "provider": self.provider_id,
+            "capabilities": self.capabilities.to_dict(),
+        }
+
     @abstractmethod
     async def initialize(self) -> None:
         """
@@ -26,9 +65,10 @@ class BaseProvider(ABC):
         pass
 
     @abstractmethod
-    async def fetch_models(self) -> list[Dict[str, Any]]:
+    async def fetch_models(self, *, refresh: bool = False) -> list[Dict[str, Any]]:
         """
         Fetch the list of real models supported by this provider.
+        Providers may use a short-lived cache unless refresh is requested.
         """
         pass
 

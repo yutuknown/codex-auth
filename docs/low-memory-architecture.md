@@ -1,7 +1,10 @@
 # Low-memory architecture
 
-The runtime does not launch Chromium. One `curl-cffi` session holds the cookie
-jar and reuses network connections.
+The runtime does not launch Chromium. Each configured provider owns at most one
+lazy curl-cffi session that holds its cookie or token state and reuses
+connections. ChatGPT uses HTTP/SSE; Microsoft 365 opens one WebSocket only
+during a generation and closes it afterward. Scaffolded or disabled providers
+allocate no network session.
 
 ```text
 HTTP request
@@ -10,10 +13,10 @@ HTTP request
 API-key middleware
     |
     v
-Single asyncio admission lock
+Provider registry (explicit provider, namespaced model, or default)
     |
     v
-Worker thread (one active upstream request)
+Provider-local asyncio admission lock
     |
     +--> session validation / bounded cookie-token refresh
     +--> Sentinel requirements and local proof-of-work
@@ -34,27 +37,29 @@ OpenAI-compatible response
    unsupported function-tool requests before expensive upstream work.
 3. Convert the caller's message history into a stateless transcript so one API
    client cannot inherit another client's ChatGPT conversation.
-4. Admit one generation at a time because the authenticated upstream session
-   has mutable Sentinel and conversation state.
-5. Reuse one TLS session and one in-memory cookie jar.
-6. On an authenticated upstream 401, exchange the existing cookie session for
+4. Select one provider without initializing unrelated providers.
+5. Admit one generation at a time per mutable authenticated upstream session.
+6. Reuse one TLS session and one in-memory credential jar per active provider.
+7. For ChatGPT, on an authenticated upstream 401, exchange the existing cookie session for
    a genuinely new access token and retry once. If the exchange is blocked or
    returns the same rejected token, retry without the bearer and let the
    authenticated cookie session authorize the backend request.
-7. Compute Sentinel proof locally with a bounded loop.
-8. Upload image/document bytes directly to the authenticated ChatGPT file
+8. For Microsoft 365, validate cookies against the chat shell, then require a
+   separately captured short-lived bearer before opening its SignalR chat hub.
+9. Compute Sentinel proof locally with a bounded loop.
+10. Upload image/document bytes directly to the authenticated ChatGPT file
    service when attachments are present.
-9. Use the regular conversation endpoint to create an isolated conversation,
+11. Use the regular conversation endpoint to create an isolated conversation,
    attaching multimodal pointers or enabling the web tool when requested.
-10. Parse assistant text and conversation identifiers from SSE.
-11. Fetch the canonical completed assistant message from the registered
+12. Parse assistant text and conversation identifiers from SSE or SignalR.
+13. Fetch the canonical completed ChatGPT assistant message from the registered
    conversation before replying. This reconciles tool/citation event shapes that
    cannot be reconstructed reliably from incremental patches alone.
-12. Put chunks onto an async queue so the synchronous TLS client does not block
+14. Put chunks onto an async queue so the synchronous TLS client does not block
    the FastAPI event loop.
-13. Store only bounded, sanitized trace summaries; never retain base64
+15. Store only bounded, sanitized trace summaries; never retain base64
    attachment bodies or public file URLs in dashboard logs.
-14. Return `Cache-Control: no-store` and retain no prompt history in the proxy.
+16. Return `Cache-Control: no-store` and retain no prompt history in the proxy.
 
 Memory usage is bounded by the Python process, cookie/model metadata, the SSE
 response buffer maintained by the HTTP library, and short response strings.

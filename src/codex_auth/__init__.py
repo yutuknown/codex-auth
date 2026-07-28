@@ -1,6 +1,6 @@
 """
 Codex-Auth
-A Stealth Playwright proxy providing an OpenAI-compatible API to ChatGPT.
+A low-memory, provider-routed compatibility API for authenticated AI sessions.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

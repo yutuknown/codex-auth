@@ -4,11 +4,17 @@ services:
     runtime: docker
     plan: free
     healthCheckPath: /healthz
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: off
     envVars:
       - key: CODEX_AUTH_COOKIES
         sync: false
       - key: CODEX_AUTH_ACCESS_TOKEN
+        sync: false
+      - key: CODEX_AUTH_M365_COOKIES
+        sync: false
+      - key: CODEX_AUTH_M365_AUTH_JSON
+        sync: false
+      - key: CODEX_AUTH_M365_OAUTH_JSON
         sync: false
       - key: CODEX_AUTH_API_KEY
         generateValue: true

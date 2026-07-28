@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codex-auth-proxy"
-version = "0.2.0"
-description = "A low-memory HTTP proxy providing an OpenAI-compatible API to ChatGPT"
+version = "0.3.0"
+description = "A low-memory, provider-routed compatibility API for authenticated AI sessions"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

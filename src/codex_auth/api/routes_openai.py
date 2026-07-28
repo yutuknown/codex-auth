@@ -11,7 +11,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..providers.errors import ProviderBusyError as GenericProviderBusyError
+from ..providers.errors import ProviderError
 from ..providers.openai.provider import ChatGPTSessionError, ProviderBusyError, provider
+from ..providers.runtime import registry
 from ..usage import record_usage
 from .trace_context import request_trace_id
 
@@ -23,13 +26,16 @@ TRACE_RESPONSE_LIMIT = 16000
 TRACE_TOOLS_TOTAL_LIMIT = 8000
 TRACE_MESSAGE_LIMIT = 100
 
+
 # --- Pydantic Schemas for Validation ---
 class ChatMessage(BaseModel):
     role: str
     content: Union[str, List[Dict[str, Any]]]
 
+
 class ChatCompletionRequest(BaseModel):
     model: str = "auto"
+    provider: str | None = None
     messages: List[ChatMessage] = Field(..., min_length=1)
     stream: bool = False
     web_search: bool = False
@@ -40,11 +46,7 @@ class ChatCompletionRequest(BaseModel):
 def _content_text(content: Union[str, List[Dict[str, Any]]]) -> str:
     if isinstance(content, str):
         return content
-    return "\n".join(
-        str(item.get("text") or "")
-        for item in content
-        if item.get("type") == "text" and item.get("text")
-    )
+    return "\n".join(str(item.get("text") or "") for item in content if item.get("type") == "text" and item.get("text"))
 
 
 def _request_input(messages: List[ChatMessage]) -> tuple[str, list[dict[str, Any] | str]]:
@@ -140,9 +142,7 @@ def _trace_attachment(item_type: str, value: Any, item: dict[str, Any]) -> dict[
         header, _, payload = source.partition(",")
         mime_type = declared_mime or header[5:].split(";", 1)[0] or "text/plain"
         encoding = "base64" if ";base64" in header.lower() else "url_encoded"
-        estimated_bytes = (
-            _estimated_base64_bytes(payload) if encoding == "base64" else len(payload)
-        )
+        estimated_bytes = _estimated_base64_bytes(payload) if encoding == "base64" else len(payload)
     elif source.startswith(("http://", "https://")):
         source_kind = "public_url"
         parsed = urllib.parse.urlsplit(source)
@@ -330,36 +330,60 @@ def _trace_data(
         "chunk_count": chunk_count,
     }
 
+
 @router.get("/v1/models")
-async def openai_models():
-    try:
-        real_models = await provider.fetch_models()
-    except ChatGPTSessionError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"message": str(exc), "type": "upstream_error"},
-        ) from exc
+async def openai_models(refresh: bool = False):
     models_data = []
-    for m in real_models:
-        slug = m.get("slug", "auto")
-        max_tokens = m.get("max_tokens", 32768)
-        models_data.append({
-            "id": slug,
-            "object": "model",
-            "created": int(time.time()),
-            "owned_by": "openai",
-            "context_length": max_tokens,
-        })
-    return {
-        "object": "list",
-        "data": models_data
-    }
+    for provider_id in registry.ids():
+        candidate = registry.get(provider_id)
+        if not candidate.is_configured():
+            continue
+        try:
+            await registry.ensure_initialized(provider_id)
+            real_models = await candidate.fetch_models(refresh=refresh)
+        except ProviderError as exc:
+            if provider_id == registry.default_provider_id:
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail={"message": str(exc), "type": exc.error_type},
+                ) from exc
+            logger.warning("Skipping unavailable provider %s: %s", provider_id, exc)
+            continue
+        for m in real_models:
+            slug = m.get("slug", "auto")
+            max_tokens = m.get("max_tokens", 32768)
+            models_data.append(
+                {
+                    "id": f"{provider_id}:{slug}",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": provider_id,
+                    "context_length": max_tokens,
+                    "name": m.get("title") or slug,
+                    "upstream_id": m.get("upstream_id"),
+                }
+            )
+            if provider_id == registry.default_provider_id:
+                models_data.append(
+                    {
+                        "id": slug,
+                        "object": "model",
+                        "created": int(time.time()),
+                        "owned_by": provider_id,
+                        "context_length": max_tokens,
+                        "name": m.get("title") or slug,
+                        "upstream_id": m.get("upstream_id"),
+                        "alias_for": f"{provider_id}:{slug}",
+                    }
+                )
+    return {"object": "list", "data": models_data}
+
 
 @router.api_route("/backend-api/{path:path}", methods=["GET", "POST", "OPTIONS"])
 async def proxy_backend_api(path: str, request: Request):
     url = f"https://chatgpt.com/backend-api/{path}"
     logger.info(f"Proxying request to [cyan]{url}[/cyan]")
-    
+
     try:
         if request.method == "OPTIONS":
             return {}
@@ -378,35 +402,61 @@ async def proxy_backend_api(path: str, request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+
 @router.post("/v1/chat/completions")
 async def openai_chat_completions(req: ChatCompletionRequest):
     request_id = request_trace_id.get()
     requested_model = req.model
     if requested_model.endswith("-vision"):
         requested_model = requested_model[:-7]
+    try:
+        selection = registry.select(requested_model, req.provider)
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"message": str(exc), "type": exc.error_type},
+        ) from exc
+    selected_provider = selection.provider
+    if selection.provider_id != registry.default_provider_id:
+        try:
+            await registry.ensure_initialized(selection.provider_id)
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"message": str(exc), "type": exc.error_type},
+            ) from exc
+    provider_model = selection.model
+    requested_model = (
+        provider_model
+        if selection.provider_id == registry.default_provider_id and req.provider is None and ":" not in req.model
+        else f"{selection.provider_id}:{provider_model}"
+    )
     if req.tools or (req.tool_choice is not None and req.tool_choice != "none"):
         detail = {
             "message": "OpenAI function tools and tool_choice are not implemented by this proxy",
             "type": "unsupported_feature",
         }
-        logger.info("[API] Request rejected - unsupported function tools", extra={
-            "trace_data": _trace_data(
-                req,
-                requested_model,
-                json.dumps({"error": detail}),
-                0,
-                0,
-                status=501,
-            ),
-            "request_id": request_id,
-        })
+        logger.info(
+            "[API] Request rejected - unsupported function tools",
+            extra={
+                "trace_data": _trace_data(
+                    req,
+                    requested_model,
+                    json.dumps({"error": detail}),
+                    0,
+                    0,
+                    status=501,
+                ),
+                "request_id": request_id,
+            },
+        )
         raise HTTPException(
             status_code=501,
             detail=detail,
         )
-    
+
     prompt, files = _request_input(req.messages)
-    
+
     def get_token_count(text: str) -> int:
         try:
             enc = tiktoken.encoding_for_model("gpt-4o")
@@ -424,119 +474,114 @@ async def openai_chat_completions(req: ChatCompletionRequest):
         chunk_count: int = 0,
     ) -> dict[str, Any]:
         error = {"message": message, "type": error_type, "code": status}
-        logger.info(f"[API] Request failed - {status} {error_type}", extra={
-            "trace_data": _trace_data(
-                req,
-                requested_model,
-                json.dumps({"error": error}),
-                0,
-                time.time() - started_at,
-                prompt_tokens,
-                0,
-                status=status,
-                chunk_count=chunk_count,
-            ),
-            "request_id": request_id,
-        })
+        logger.info(
+            f"[API] Request failed - {status} {error_type}",
+            extra={
+                "trace_data": _trace_data(
+                    req,
+                    requested_model,
+                    json.dumps({"error": error}),
+                    0,
+                    time.time() - started_at,
+                    prompt_tokens,
+                    0,
+                    status=status,
+                    chunk_count=chunk_count,
+                ),
+                "request_id": request_id,
+            },
+        )
         return {"error": error}
-    
+
     if req.stream:
+
         async def event_generator():
             full_response = ""
             chunk_count = 0
             created_time = int(time.time())
-            
+
             start_time = time.time()
             ttft_s = 0.0
             first_token_received = False
-            
+
             try:
-                async for chunk in provider.generate_stream(
+                async for chunk in selected_provider.generate_stream(
                     prompt,
                     files=files,
                     web_search=req.web_search,
-                    model=requested_model,
+                    model=provider_model,
                     realtime=False,
                 ):
                     if not first_token_received:
                         ttft_s = time.time() - start_time
                         first_token_received = True
-                        
+
                     full_response += chunk
                     chunk_count += 1
-                    
+
                     data = {
                         "id": "chatcmpl-stealth",
                         "object": "chat.completion.chunk",
                         "created": created_time,
                         "model": requested_model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": chunk},
-                                "finish_reason": None
-                            }
-                        ]
+                        "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
                     }
                     yield f"data: {json.dumps(data)}\n\n"
-                
+
                 # Record Usage before sending final chunk so we have the counts
                 generation_s = time.time() - start_time
                 completion_tokens = get_token_count(full_response)
-                
+
                 # Final finish event
                 final_data = {
                     "id": "chatcmpl-stealth",
                     "object": "chat.completion.chunk",
                     "created": created_time,
                     "model": requested_model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }
-                    ],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                     "usage": {
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
-                        "prompt_tokens_details": {
-                            "cached_tokens": 0
-                        },
-                        "completion_tokens_details": {
-                            "reasoning_tokens": 0
-                        }
-                    }
+                        "prompt_tokens_details": {"cached_tokens": 0},
+                        "completion_tokens_details": {"reasoning_tokens": 0},
+                    },
                 }
                 yield f"data: {json.dumps(final_data)}\n\n"
                 yield "data: [DONE]\n\n"
-                
+
                 # Record Usage after stream finishes
                 try:
                     record_usage(requested_model, prompt_tokens, completion_tokens, ttft_s, generation_s)
                 except Exception as e:
                     logger.error(f"[API] Failed to record usage: {e}")
-                logger.info(f"[API] Stream completed - TTFT: {ttft_s*1000:.0f}ms - {completion_tokens} tok", extra={
-                    "trace_data": _trace_data(
-                        req,
-                        requested_model,
-                        full_response,
-                        round(ttft_s * 1000),
-                        generation_s,
-                        prompt_tokens,
-                        completion_tokens,
-                        chunk_count=chunk_count,
-                    ),
-                    "request_id": request_id,
-                })
-                    
-            except ProviderBusyError as e:
+                logger.info(
+                    f"[API] Stream completed - TTFT: {ttft_s * 1000:.0f}ms - {completion_tokens} tok",
+                    extra={
+                        "trace_data": _trace_data(
+                            req,
+                            requested_model,
+                            full_response,
+                            round(ttft_s * 1000),
+                            generation_s,
+                            prompt_tokens,
+                            completion_tokens,
+                            chunk_count=chunk_count,
+                        ),
+                        "request_id": request_id,
+                    },
+                )
+
+            except (ProviderBusyError, GenericProviderBusyError) as e:
                 err = log_failure(429, "rate_limit_error", str(e), start_time, chunk_count)
                 yield f"data: {json.dumps(err)}\n\n"
                 yield "data: [DONE]\n\n"
             except ChatGPTSessionError as e:
                 err = log_failure(502, "upstream_error", str(e), start_time, chunk_count)
+                yield f"data: {json.dumps(err)}\n\n"
+                yield "data: [DONE]\n\n"
+            except ProviderError as e:
+                err = log_failure(e.status_code, e.error_type, str(e), start_time, chunk_count)
                 yield f"data: {json.dumps(err)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
@@ -552,16 +597,16 @@ async def openai_chat_completions(req: ChatCompletionRequest):
         chunk_count = 0
         start_time = time.time()
         try:
-            async for chunk in provider.generate_stream(
+            async for chunk in selected_provider.generate_stream(
                 prompt,
                 files=files,
                 web_search=req.web_search,
-                model=requested_model,
+                model=provider_model,
                 realtime=False,
             ):
                 full_response += chunk
                 chunk_count += 1
-                
+
             generation_s = time.time() - start_time
             completion_tokens = get_token_count(full_response)
             try:
@@ -569,19 +614,22 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                 record_usage(requested_model, prompt_tokens, completion_tokens, generation_s, generation_s)
             except Exception as e:
                 logger.error(f"[API] Failed to record usage: {e}")
-            logger.info(f"[API] Request completed - {completion_tokens} tok", extra={
-                "trace_data": _trace_data(
-                    req,
-                    requested_model,
-                    full_response,
-                    round(generation_s * 1000),
-                    generation_s,
-                    prompt_tokens,
-                    completion_tokens,
-                    chunk_count=chunk_count,
-                ),
-                "request_id": request_id,
-            })
+            logger.info(
+                f"[API] Request completed - {completion_tokens} tok",
+                extra={
+                    "trace_data": _trace_data(
+                        req,
+                        requested_model,
+                        full_response,
+                        round(generation_s * 1000),
+                        generation_s,
+                        prompt_tokens,
+                        completion_tokens,
+                        chunk_count=chunk_count,
+                    ),
+                    "request_id": request_id,
+                },
+            )
 
             return {
                 "id": "chatcmpl-stealth",
@@ -589,28 +637,17 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                 "created": int(time.time()),
                 "model": requested_model,
                 "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": full_response
-                        },
-                        "finish_reason": "stop"
-                    }
+                    {"index": 0, "message": {"role": "assistant", "content": full_response}, "finish_reason": "stop"}
                 ],
                 "usage": {
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "total_tokens": prompt_tokens + completion_tokens,
-                    "prompt_tokens_details": {
-                        "cached_tokens": 0
-                    },
-                    "completion_tokens_details": {
-                        "reasoning_tokens": 0
-                    }
-                }
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                    "completion_tokens_details": {"reasoning_tokens": 0},
+                },
             }
-        except ProviderBusyError as e:
+        except (ProviderBusyError, GenericProviderBusyError) as e:
             log_failure(429, "rate_limit_error", str(e), start_time, chunk_count)
             raise HTTPException(
                 status_code=429,
@@ -620,6 +657,12 @@ async def openai_chat_completions(req: ChatCompletionRequest):
         except ChatGPTSessionError as e:
             log_failure(502, "upstream_error", str(e), start_time, chunk_count)
             raise HTTPException(status_code=502, detail={"message": str(e), "type": "upstream_error"})
+        except ProviderError as e:
+            log_failure(e.status_code, e.error_type, str(e), start_time, chunk_count)
+            raise HTTPException(
+                status_code=e.status_code,
+                detail={"message": str(e), "type": e.error_type},
+            ) from e
         except Exception as e:
             log_failure(500, "internal_error", str(e), start_time, chunk_count)
             raise HTTPException(status_code=500, detail={"message": str(e), "type": "internal_error"})

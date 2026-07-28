@@ -22,8 +22,11 @@ from typing import Any, AsyncGenerator, Dict, Iterable
 
 from curl_cffi.requests import Session
 
-from ...config import load_cookie_text
-from ..base import BaseProvider
+from ...config import auth_is_configured, load_cookie_text
+from ..base import BaseProvider, ProviderCapabilities
+from ..cookies import parse_netscape_cookies
+from ..errors import ProviderBusyError as BaseProviderBusyError
+from ..errors import ProviderUpstreamError
 
 logger = logging.getLogger("codex_auth")
 
@@ -41,11 +44,11 @@ METADATA_CACHE_SECONDS = 300
 AUTH_FAILURE_STATUS_CODES = {401, 403}
 
 
-class ChatGPTSessionError(RuntimeError):
+class ChatGPTSessionError(ProviderUpstreamError):
     pass
 
 
-class ProviderBusyError(ChatGPTSessionError):
+class ProviderBusyError(BaseProviderBusyError, ChatGPTSessionError):
     pass
 
 
@@ -91,34 +94,6 @@ def _sniff_mime_type(data: bytes, declared: str | None = None) -> str:
     if b"\x00" not in data[:1024]:
         return "text/plain"
     return "application/octet-stream"
-
-
-def parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
-    """Parse the seven-column Netscape cookie format without writing a temp file."""
-    cookies = []
-    for line_number, raw_line in enumerate(text.splitlines(), 1):
-        line = raw_line.strip()
-        if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
-            continue
-        if line.startswith("#HttpOnly_"):
-            line = line[len("#HttpOnly_") :]
-        fields = line.split("\t")
-        if len(fields) != 7:
-            raise ValueError(f"Invalid Netscape cookie record on line {line_number}")
-        domain, _, path, secure, expires, name, value = fields
-        cookies.append(
-            {
-                "name": name,
-                "value": value,
-                "domain": domain,
-                "path": path or "/",
-                "secure": secure.upper() == "TRUE",
-                "expires_at": int(expires) if expires.isdigit() and int(expires) > 0 else None,
-            }
-        )
-    if not cookies:
-        raise ValueError("The cookie source contains no Netscape cookie records")
-    return cookies
 
 
 def _pow_config() -> list[Any]:
@@ -221,6 +196,20 @@ def _message_delta(event: Any, state: dict[str, Any]) -> str:
 
 
 class OpenAIProvider(BaseProvider):
+    provider_id = "openai-web"
+    display_name = "ChatGPT Web"
+    auth_kind = "ChatGPT cookies"
+    capabilities = ProviderCapabilities(
+        text=True,
+        streaming=True,
+        image_input=True,
+        file_input=True,
+        web_search=True,
+    )
+
+    def is_configured(self) -> bool:
+        return auth_is_configured()
+
     def __init__(self):
         self.session: Session | None = None
         self.access_token = ""

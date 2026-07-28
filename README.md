@@ -7,7 +7,7 @@
 
   # Codex-Auth
 
-  **A low-memory HTTP proxy providing an OpenAI-compatible API layer over ChatGPT.**
+  **A low-memory, provider-routed compatibility API for authenticated AI sessions.**
 
   [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
   [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -17,9 +17,11 @@
 
 <br />
 
-Codex-Auth is a Python package that provides an OpenAI-compatible API proxy
-backed by a ChatGPT web session. It uses direct HTTP requests and an incremental
-SSE parser, so Chromium and Playwright are not required at runtime.
+Codex-Auth is a Python package that provides an OpenAI-compatible API proxy.
+Its shipped providers support authenticated ChatGPT Web and Microsoft 365
+Copilot Chat sessions behind one namespaced model catalog. It uses direct HTTP,
+SSE, and WebSocket transports, so Chromium and Playwright are not required at
+runtime.
 
 > ChatGPT's web endpoints are undocumented and can change without notice. A
 > ChatGPT subscription is not an OpenAI API subscription.
@@ -83,6 +85,29 @@ and save them at:
 
 The `.codex` directory is ignored by Git. Never commit or share this file.
 Alternatively, set `CODEX_AUTH_COOKIE_FILE` to a different path.
+
+For Microsoft 365 Copilot, save the Netscape cookie export at
+`.codex/m365-cookies.txt` and the current Copilot connection metadata at
+`.codex/m365-auth.json`. A captured OAuth refresh exchange can be stored at
+`.codex/m365-oauth.json`, then select a namespaced model such as
+`m365-copilot:auto` or `m365-copilot:gpt-5.5-think-deeper`. Render deployments
+can provide the same values through
+`CODEX_AUTH_M365_COOKIES`, `CODEX_AUTH_M365_AUTH_JSON`, and
+`CODEX_AUTH_M365_OAUTH_JSON`.
+
+The provider discovers the current account-visible Microsoft model selector
+from authenticated `GET https://m365.cloud.microsoft/chat` hydration data. The
+result is cached for 15 minutes and safely falls back to the last known catalog
+if a refresh fails. Use `GET /v1/models?refresh=true` or
+`GET /api/providers/m365-copilot/models?refresh=true` to force a refresh.
+
+The Microsoft 365 web cookies validate the signed-in web shell, but they do not
+contain the OAuth refresh token used by the site. The bearer in
+`m365-auth.json` is short-lived. When `m365-oauth.json` is present, the adapter
+uses the captured `grant_type=refresh_token` exchange before expiry, rotates
+both returned tokens atomically, and keeps the browser-free runtime renewable.
+Without it, the adapter reports `generation_ready: false` after the bearer
+expires instead of pretending a cookie-only session can generate.
 
 ### 2. Start the Proxy Server
 
@@ -158,20 +183,43 @@ Configure any OpenAI-compatible client with:
 ```mermaid
 graph LR
     A[AI Tool / IDE] -->|OpenAI API Request| B(FastAPI Server)
-    B -->|Single admission lock| C{curl-cffi HTTP session}
-    C -->|Isolated request| D[ChatGPT conversation]
-    D --> E[SSE parser]
-    D --> F[Canonical response check]
-    E --> G[Response reconciler]
-    F --> G
-    G --> A
+    B --> R{Provider registry}
+    R -->|default or openai-web:model| C[ChatGPT web adapter]
+    R -->|m365-copilot:auto| M[Microsoft 365 web adapter]
+    C -->|Provider-local admission lock| D[ChatGPT conversation]
+    M -->|Provider-local admission lock| H[Copilot SignalR chat hub]
+    D --> E[SSE and canonical reconciler]
+    H --> A
+    E --> A
 ```
 
 - **FastAPI** handles API routing, API-key checks, and the dashboard.
+- **The provider registry** selects an isolated adapter without initializing
+  unrelated providers.
 - **curl-cffi** maintains the authenticated HTTP cookie session.
 - **The response reconciler** combines SSE delivery with the canonical stored
   assistant message for reliable long multimodal and web-search responses.
 - **Typer and Rich** power the CLI.
+
+Provider selection is backward compatible: an unqualified model such as `auto`
+uses the default provider. Multi-provider clients can use a namespaced model
+such as `openai-web:auto` or send the optional `provider` field. Microsoft 365
+Copilot text and web-search generation are implemented through its web
+SignalR transport; file input is rejected explicitly until its upload protocol
+is implemented. Gemini is intentionally not registered in the shipped runtime
+yet. See
+[the provider architecture and implementation roadmap](docs/provider-architecture.md).
+
+Microsoft 365 model IDs are discovered dynamically and map to the `tone` field
+in the SignalR chat invocation. At the time of the latest verified session:
+
+| API model | Captured Microsoft tone |
+| --- | --- |
+| `m365-copilot:auto` | `Magic` |
+| `m365-copilot:quick-response` | `Chat` |
+| `m365-copilot:think-deeper` | `Reasoning` |
+| `m365-copilot:gpt-5.5-quick-response` | `Gpt_5_5_Chat` |
+| `m365-copilot:gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` |
 
 ## 🤝 Contributors
 

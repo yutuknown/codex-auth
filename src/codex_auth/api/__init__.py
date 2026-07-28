@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from rich.logging import RichHandler
 
-from ..providers.openai.provider import provider
+from ..providers.runtime import registry
 from .trace_context import request_trace_id
 
 # Store the last 500 logs in memory for the UI dashboard
@@ -121,15 +121,15 @@ async def app_lifespan(app: FastAPI):
     if open_dashboard not in {"0", "false", "no"}:
         threading.Thread(target=auto_open_dashboard, daemon=True).start()
     
-    await provider.initialize()
+    await registry.initialize_default()
     try:
         yield
     finally:
-        await provider.close()
+        await registry.close_instances()
 
 from fastapi import Request
 
-app = FastAPI(title="ChatGPT Stealth API", lifespan=app_lifespan)
+app = FastAPI(title="Codex Auth Multi-Provider API", lifespan=app_lifespan)
 
 
 def api_key_is_valid(request: Request, expected_key: str) -> bool:

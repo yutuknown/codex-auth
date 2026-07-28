@@ -7,7 +7,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from ..config import auth_is_configured, get_auth_file, get_cookie_file, save_cookie_text
+from ..config import (
+    auth_is_configured,
+    get_auth_file,
+    get_cookie_file,
+    save_cookie_text,
+    save_provider_cookie_text,
+)
 
 router = APIRouter()
 MAX_COOKIE_UPDATE_CHARACTERS = 512 * 1024
@@ -16,6 +22,7 @@ MAX_COOKIE_UPDATE_CHARACTERS = 512 * 1024
 class CookieUpdateRequest(BaseModel):
     cookies: str = Field(min_length=1, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
     source_name: str | None = Field(default=None, max_length=128)
+    provider: str = Field(default="openai-web", max_length=64)
 
 
 LOGIN_PAGE = """<!doctype html>
@@ -109,16 +116,20 @@ async def serve_dashboard():
         return dashboard_path.read_text(encoding="utf-8")
     return "<h1>Dashboard UI Not Found</h1>"
 
+
 @router.get("/api/logs")
 async def get_logs():
     # Import log_stream inside the route to avoid circular imports
     from . import log_stream, log_stream_lock
+
     with log_stream_lock:
         return {"logs": [dict(entry) for entry in log_stream]}
+
 
 @router.get("/api/usage")
 async def get_usage():
     from ..usage import DEFAULT_PRICING, PRICING, get_usage_file, load_usage
+
     usage_file = get_usage_file()
     if usage_file.exists():
         try:
@@ -133,10 +144,10 @@ async def get_usage():
                 total_ttft_s = stats.get("total_ttft_s", 0.0)
                 total_generation_s = stats.get("total_generation_s", 0.0)
                 requests_count = stats.get("requests", 0)
-                
+
                 avg_ttft_ms = (total_ttft_s / requests_count * 1000) if requests_count > 0 else 0
                 tokens_per_sec = (output_tok / total_generation_s) if total_generation_s > 0 else 0
-                
+
                 models_out[model] = {
                     "prompt_tokens": input_tok,
                     "completion_tokens": output_tok,
@@ -154,12 +165,20 @@ async def get_usage():
             }
         except Exception:
             pass
-    return {"models": {}, "total_requests": 0, "total_input_tokens": 0, "total_output_tokens": 0, "total_savings_usd": 0.0}
+    return {
+        "models": {},
+        "total_requests": 0,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_savings_usd": 0.0,
+    }
+
 
 @router.get("/api/status")
 async def get_status():
     from .. import __version__
     from ..providers.openai.provider import provider
+    from ..providers.runtime import registry
 
     auth_file = get_auth_file()
     cookie_file = get_cookie_file()
@@ -187,6 +206,18 @@ async def get_status():
         "is_configured": is_configured,
         "version": __version__,
         "runtime": runtime,
+        "default_provider": registry.default_provider_id,
+        "providers": registry.statuses(),
+    }
+
+
+@router.get("/api/providers")
+async def get_providers():
+    from ..providers.runtime import registry
+
+    return {
+        "default_provider": registry.default_provider_id,
+        "providers": registry.statuses(),
     }
 
 
@@ -205,11 +236,23 @@ async def get_account():
 
 @router.post("/api/auth/cookies")
 async def update_session_cookies(payload: CookieUpdateRequest):
-    from ..providers.openai.provider import ChatGPTSessionError, provider
+    from ..providers.errors import ProviderError
+    from ..providers.openai.provider import ChatGPTSessionError
+    from ..providers.openai.provider import provider as openai_provider
+    from ..providers.runtime import registry
 
+    if payload.provider not in {"openai-web", "m365-copilot"}:
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "message": (f"Cookie replacement for provider '{payload.provider}' is not implemented yet"),
+                "type": "unsupported_feature",
+            },
+        )
     cookie_text = payload.cookies.strip()
+    active_provider = openai_provider if payload.provider == "openai-web" else registry.get("m365-copilot")
     try:
-        details = await provider.replace_cookies(cookie_text)
+        details = await active_provider.replace_cookies(cookie_text)
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
@@ -220,19 +263,26 @@ async def update_session_cookies(payload: CookieUpdateRequest):
             status_code=422,
             detail={"message": str(exc), "type": "cookie_validation_error"},
         ) from exc
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": str(exc), "type": "cookie_validation_error"},
+        ) from exc
 
     file_saved = False
     persistence_warning = None
     try:
-        save_cookie_text(cookie_text)
+        if payload.provider == "openai-web":
+            save_cookie_text(cookie_text)
+        else:
+            save_provider_cookie_text(payload.provider, cookie_text)
         file_saved = True
     except OSError:
-        persistence_warning = (
-            "The cookies are active in this process, but the local cookie file could not be updated"
-        )
-    os.environ["CODEX_AUTH_COOKIES"] = cookie_text
+        persistence_warning = "The cookies are active in this process, but the local cookie file could not be updated"
+    environment_name = "CODEX_AUTH_COOKIES" if payload.provider == "openai-web" else "CODEX_AUTH_M365_COOKIES"
+    os.environ[environment_name] = cookie_text
 
-    runtime = provider.runtime_status()
+    runtime = active_provider.runtime_status()
     profile = details.get("profile") or {}
     account = details.get("account") or {}
     entitlement = details.get("entitlement") or {}
@@ -240,11 +290,14 @@ async def update_session_cookies(payload: CookieUpdateRequest):
     if hosted_on_render:
         persistence_warning = (
             "Active now. To survive a Render restart or deploy, also update the "
-            "CODEX_AUTH_COOKIES secret or attach a persistent disk"
+            f"{environment_name} secret or attach a persistent disk"
         )
     return {
         "status": "activated",
-        "cookie_count": len(provider.cookie_metadata),
+        "provider": payload.provider,
+        "cookie_count": (
+            len(openai_provider.cookie_metadata) if payload.provider == "openai-web" else runtime.get("cookie_count", 0)
+        ),
         "auth_mode": runtime.get("auth_mode"),
         "session_cookie": runtime.get("session_cookie"),
         "profile": {
@@ -257,6 +310,10 @@ async def update_session_cookies(payload: CookieUpdateRequest):
             "subscription_plan": entitlement.get("subscription_plan"),
             "session_access": bool(details.get("can_access_with_session")),
         },
+        "generation_ready": runtime.get("generation_ready", True),
+        "model_count": runtime.get("model_count"),
+        "default_model": runtime.get("default_model"),
+        "model_catalog_source": runtime.get("model_catalog_source"),
         "persistence": {
             "runtime_active": True,
             "file_saved": file_saved,
@@ -266,52 +323,102 @@ async def update_session_cookies(payload: CookieUpdateRequest):
     }
 
 
-@router.get("/api/models_list")
-async def get_models_list():
+def _dashboard_model(
+    provider_id: str,
+    model: dict,
+    proxy_capabilities: dict,
+    *,
+    default_provider: bool,
+) -> dict:
+    slug = model.get("slug", "auto")
+    product_features = model.get("product_features") or {}
+    attachments = product_features.get("attachments") or {}
+    enabled_tools = model.get("enabled_tools") or []
+    return {
+        "id": f"{provider_id}:{slug}",
+        "alias": slug if default_provider else None,
+        "provider": provider_id,
+        "slug": slug,
+        "upstream_id": model.get("upstream_id"),
+        "title": model.get("title") or slug,
+        "description": model.get("description") or "",
+        "context_length": model.get("max_tokens", 32768),
+        "reasoning_type": model.get("reasoning_type")
+        or ("reasoning" if "think" in slug or "reasoning" in slug else "none"),
+        "configurable_thinking_effort": bool(model.get("configurable_thinking_effort")),
+        "upstream_capabilities": {
+            "attachments": bool(attachments),
+            "image_input": bool(attachments.get("image_mime_types")),
+            "tools": "tools" in enabled_tools or "tools2" in enabled_tools,
+            "search": "search" in enabled_tools,
+            "canvas": "canvas" in enabled_tools,
+            "image_generation": "image_gen_tool_enabled" in enabled_tools,
+        },
+        "proxy_capabilities": dict(proxy_capabilities),
+    }
 
-    from ..providers.openai.provider import ChatGPTSessionError
-    from .routes_openai import provider
-    
-    try:
-        real_models = await provider.fetch_models()
-    except ChatGPTSessionError as exc:
+
+@router.get("/api/models_list")
+async def get_models_list(provider: str | None = None, refresh: bool = False):
+    from ..providers.errors import ProviderError
+    from ..providers.runtime import registry
+
+    provider_ids = [provider] if provider else list(registry.ids())
+    unknown = [provider_id for provider_id in provider_ids if provider_id not in registry.ids()]
+    if unknown:
         raise HTTPException(
-            status_code=502,
-            detail={"message": str(exc), "type": "upstream_error"},
-        ) from exc
+            status_code=404,
+            detail={"message": f"Unknown provider '{unknown[0]}'", "type": "not_found"},
+        )
+
     models_out = []
-    proxy_capabilities = provider.runtime_status()["proxy_capabilities"]
-    
-    for m in real_models:
-        slug = m.get("slug", "auto")
-        max_tokens = m.get("max_tokens", 32768)
-        product_features = m.get("product_features", {})
-        attachments = product_features.get("attachments", {})
-        enabled_tools = m.get("enabled_tools") or []
-            
-        models_out.append({
-            "id": slug,
-            "title": m.get("title") or slug,
-            "description": m.get("description") or "",
-            "context_length": max_tokens,
-            "reasoning_type": m.get("reasoning_type") or "none",
-            "configurable_thinking_effort": bool(m.get("configurable_thinking_effort")),
-            "upstream_capabilities": {
-                "attachments": bool(attachments),
-                "image_input": bool(attachments.get("image_mime_types")),
-                "tools": "tools" in enabled_tools or "tools2" in enabled_tools,
-                "search": "search" in enabled_tools,
-                "canvas": "canvas" in enabled_tools,
-                "image_generation": "image_gen_tool_enabled" in enabled_tools,
-            },
-            "proxy_capabilities": {
-                **proxy_capabilities,
-            },
-        })
-        
+    sources = {}
+    errors = []
+    for provider_id in provider_ids:
+        candidate = registry.get(provider_id)
+        if not candidate.is_configured():
+            continue
+        try:
+            await registry.ensure_initialized(provider_id)
+            real_models = await candidate.fetch_models(refresh=refresh)
+        except ProviderError as exc:
+            errors.append(
+                {
+                    "provider": provider_id,
+                    "message": str(exc),
+                    "type": exc.error_type,
+                }
+            )
+            continue
+        runtime = candidate.runtime_status()
+        proxy_capabilities = runtime.get("proxy_capabilities", candidate.capabilities.to_dict())
+        sources[provider_id] = runtime.get(
+            "model_catalog_source",
+            "/backend-api/models" if provider_id == "openai-web" else "provider",
+        )
+        models_out.extend(
+            _dashboard_model(
+                provider_id,
+                model,
+                proxy_capabilities,
+                default_provider=provider_id == registry.default_provider_id,
+            )
+            for model in real_models
+        )
+
+    default_candidate = registry.get(registry.default_provider_id)
+    default_model = getattr(default_candidate, "default_model", "auto")
     return {
         "models": models_out,
         "model_count": len(models_out),
-        "default_model": "auto",
-        "source": "/backend-api/models",
+        "default_model": f"{registry.default_provider_id}:{default_model}",
+        "default_provider": registry.default_provider_id,
+        "sources": sources,
+        "errors": errors,
+        "refreshed": refresh,
     }
+
+
+@router.get("/api/providers/{provider_id}/models")
+async def get_provider_models(provider_id: str, refresh: bool = False):
+    return await get_models_list(provider=provider_id, refresh=refresh)

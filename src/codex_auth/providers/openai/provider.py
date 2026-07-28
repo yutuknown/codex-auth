@@ -994,31 +994,88 @@ class OpenAIProvider(BaseProvider):
         entitlement = account_data.get("entitlement") or {}
         subscription = account_data.get("last_active_subscription") or {}
         user_settings = (settings_payload or {}).get("settings") or {}
+        endpoint_health = {
+            name: {
+                "status": status,
+                "state": (
+                    "available"
+                    if status == 200
+                    else "restricted"
+                    if status in AUTH_FAILURE_STATUS_CODES
+                    else "error"
+                ),
+                "required": name in {"account", "profile"},
+            }
+            for name, status in endpoint_status.items()
+        }
+        warnings = []
+        for name, status in endpoint_status.items():
+            if status == 200:
+                continue
+            if name == "settings" and status in AUTH_FAILURE_STATUS_CODES:
+                warnings.append(
+                    "Optional privacy settings are unavailable in cookie-only mode"
+                )
+            else:
+                warnings.append(f"{name} endpoint returned HTTP {status}")
         return {
             "profile": {
+                "id": profile.get("id"),
+                "object": profile.get("object"),
                 "name": profile.get("name") or profile.get("first_name"),
                 "email": profile.get("email"),
+                "picture": profile.get("picture"),
+                "phone_number": profile.get("phone_number"),
                 "created_at": self._expiry_details(profile.get("created")).get("expires_at"),
                 "country": profile.get("country"),
                 "region": profile.get("region"),
                 "region_code": profile.get("region_code"),
-                "mfa_enabled": bool(profile.get("mfa_flag_enabled")),
+                "mfa_enabled": (
+                    bool(profile.get("mfa_flag_enabled"))
+                    if "mfa_flag_enabled" in profile
+                    else None
+                ),
                 "email_domain_type": profile.get("email_domain_type"),
+                "identity_level": (
+                    "identified"
+                    if profile.get("email") or profile.get("name")
+                    else "guest_session"
+                ),
             },
             "account": {
                 "id": account.get("account_id"),
+                "user_id": account.get("account_user_id"),
+                "owner_id": account.get("account_owner_id"),
+                "organization_id": account.get("organization_id"),
+                "name": account.get("name"),
                 "role": account.get("account_user_role"),
                 "structure": account.get("structure"),
+                "workspace_type": account.get("workspace_type"),
                 "plan_type": account.get("plan_type"),
+                "processor": account.get("processor"),
                 "is_deactivated": bool(account.get("is_deactivated")),
+                "eligible_for_reactivation": bool(account.get("eligible_for_reactivation")),
+                "has_previously_paid_subscription": bool(
+                    account.get("has_previously_paid_subscription")
+                ),
                 "residency": account.get("account_compute_residency_display_name"),
                 "residency_description": account.get("account_compute_residency_description"),
+                "hipaa_compliant": bool(account.get("is_hipaa_compliant_workspace")),
+                "finserv_enabled": bool(account.get("is_finserv_enabled_workspace")),
+                "fedramp_compliant": bool(account.get("is_fedramp_compliant_workspace")),
             },
             "entitlement": {
+                "subscription_id": entitlement.get("subscription_id"),
                 "subscription_plan": entitlement.get("subscription_plan"),
                 "has_active_subscription": bool(entitlement.get("has_active_subscription")),
+                "is_active_subscription_gratis": bool(
+                    entitlement.get("is_active_subscription_gratis")
+                ),
                 "expires_at": entitlement.get("expires_at"),
                 "renews_at": entitlement.get("renews_at"),
+                "cancels_at": entitlement.get("cancels_at"),
+                "billing_period": entitlement.get("billing_period"),
+                "billing_currency": entitlement.get("billing_currency"),
                 "will_renew": bool(subscription.get("will_renew")),
                 "is_delinquent": bool(entitlement.get("is_delinquent")),
             },
@@ -1031,11 +1088,13 @@ class OpenAIProvider(BaseProvider):
             "feature_count": len(account_data.get("features") or []),
             "can_access_with_session": bool(account_data.get("can_access_with_session")),
             "endpoint_status": endpoint_status,
-            "warnings": [
-                f"{name} endpoint returned HTTP {status}"
-                for name, status in endpoint_status.items()
-                if status != 200
-            ],
+            "endpoint_health": endpoint_health,
+            "data_quality": {
+                "state": "complete" if all(status == 200 for status in endpoint_status.values()) else "partial",
+                "identity": "identified" if profile.get("email") or profile.get("name") else "guest",
+                "privacy_settings": "available" if settings_response.status_code == 200 else "unavailable",
+            },
+            "warnings": warnings,
             "runtime": self.runtime_status(),
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }

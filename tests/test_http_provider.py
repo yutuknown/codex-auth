@@ -310,14 +310,24 @@ def test_account_discovery_keeps_profile_when_optional_settings_are_unauthorized
             {
                 "accounts": {
                     "default": {
-                        "account": {"plan_type": "free"},
+                        "account": {
+                            "account_user_role": "account-owner",
+                            "plan_type": "free",
+                        },
                         "features": ["feature-a"],
                         "can_access_with_session": True,
                     }
                 }
             },
         ),
-        "/backend-api/me": FakeResponse(200, {"email": "user@example.com"}),
+        "/backend-api/me": FakeResponse(
+            200,
+            {
+                "id": "user-123",
+                "object": "user",
+                "email": "user@example.com",
+            },
+        ),
         "/backend-api/settings/user": FakeResponse(401),
     }
     provider = OpenAIProvider()
@@ -331,7 +341,22 @@ def test_account_discovery_keeps_profile_when_optional_settings_are_unauthorized
     details = provider._fetch_account_details_sync()
 
     assert details["profile"]["email"] == "user@example.com"
+    assert details["profile"]["id"] == "user-123"
+    assert details["profile"]["mfa_enabled"] is None
     assert details["account"]["plan_type"] == "free"
+    assert details["account"]["role"] == "account-owner"
     assert details["feature_count"] == 1
     assert details["endpoint_status"]["settings"] == 401
-    assert details["warnings"] == ["settings endpoint returned HTTP 401"]
+    assert details["endpoint_health"]["settings"] == {
+        "status": 401,
+        "state": "restricted",
+        "required": False,
+    }
+    assert details["data_quality"] == {
+        "state": "partial",
+        "identity": "identified",
+        "privacy_settings": "unavailable",
+    }
+    assert details["warnings"] == [
+        "Optional privacy settings are unavailable in cookie-only mode"
+    ]

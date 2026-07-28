@@ -226,6 +226,7 @@
         }
 
         .status-badge.online { background: rgba(16, 185, 129, 0.1); color: var(--log-success); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .status-badge.warning { background: rgba(251, 191, 36, 0.1); color: var(--log-warn); border: 1px solid rgba(251, 191, 36, 0.24); }
         .status-badge.error { background: rgba(239, 68, 68, 0.1); color: var(--log-error); border: 1px solid rgba(239, 68, 68, 0.2); }
 
         .theme-toggle-btn {
@@ -579,6 +580,16 @@
         .progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width .35s ease; }
         .capability-list { display: flex; flex-wrap: wrap; gap: 6px; }
         .warning-note { margin-top: 18px; padding: 12px 14px; border: 1px solid rgba(251, 191, 36, .25); border-radius: 8px; color: #fbbf24; background: rgba(251, 191, 36, .06); font-size: 12px; line-height: 1.5; }
+        .account-health { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-base); }
+        .account-health-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+        .account-health-title { color: var(--text-secondary); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+        .endpoint-health-list { display: flex; flex-wrap: wrap; gap: 8px; }
+        .endpoint-health-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-secondary); font: 11px var(--font-mono); background: var(--bg-surface); }
+        .endpoint-health-pill::before { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); content: ""; }
+        .endpoint-health-pill.available::before { background: var(--log-success); }
+        .endpoint-health-pill.restricted::before { background: var(--log-warn); }
+        .endpoint-health-pill.error::before { background: var(--log-error); }
+        .account-health-note { margin-top: 10px; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
 
         @media (max-width: 720px) {
             .detail-grid { grid-template-columns: 1fr; }
@@ -760,24 +771,36 @@
                                 <h3 style="margin: 0 0 6px 0;" id="account-name">Authenticated Account</h3>
                                 <p style="color: var(--text-secondary); margin: 0; font-size: 14px;" id="account-email">Loading profile from /backend-api/me…</p>
                             </div>
-                            <div id="auth-status" class="status-badge" style="border: 1px solid var(--border-strong);">Fetching...</div>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+                                <div id="data-status" class="status-badge" style="border: 1px solid var(--border-strong);">Loading data...</div>
+                                <div id="auth-status" class="status-badge" style="border: 1px solid var(--border-strong);">Checking session...</div>
+                            </div>
                         </div>
 
                         <div class="detail-grid" style="margin-bottom:24px;">
+                            <div class="detail-item"><label>User ID</label><div class="font-mono" id="profile-id">-</div></div>
                             <div class="detail-item"><label>Account ID</label><div class="font-mono" id="account-id">-</div></div>
                             <div class="detail-item"><label>Role</label><div id="account-role">-</div></div>
                             <div class="detail-item"><label>Plan</label><div id="account-plan">-</div></div>
                             <div class="detail-item"><label>Entitlement</label><div id="account-entitlement">-</div></div>
                             <div class="detail-item"><label>Location</label><div id="account-location">-</div></div>
-                            <div class="detail-item"><label>MFA</label><div id="account-mfa">-</div></div>
                             <div class="detail-item"><label>Workspace</label><div id="account-structure">-</div></div>
                             <div class="detail-item"><label>Compute Residency</label><div id="account-residency">-</div></div>
+                            <div class="detail-item"><label>Account State</label><div id="account-state">-</div></div>
+                            <div class="detail-item"><label>Profile Created</label><div id="profile-created">-</div></div>
                         </div>
-                        <div class="warning-note" id="account-warning" style="display:none; margin:0 0 24px 0;"></div>
+                        <div class="account-health" id="account-health">
+                            <div class="account-health-header">
+                                <span class="account-health-title">Upstream endpoint health</span>
+                                <span class="font-mono" id="account-health-summary" style="font-size:11px;color:var(--text-secondary);">Checking...</span>
+                            </div>
+                            <div class="endpoint-health-list" id="endpoint-health-list"></div>
+                            <div class="account-health-note" id="account-warning"></div>
+                        </div>
                         
                         <div style="background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 16px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                                <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Credentials Path</span>
+                                <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Credential Source</span>
                                 <button class="theme-toggle-btn" style="padding: 4px 8px; gap: 6px; border-radius: 6px; font-size: 12px;" onclick="copyToClipboard('auth-path', this)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                                     Copy
@@ -818,6 +841,8 @@
                             <div class="detail-item"><label>Codex Training</label><div id="privacy-codex-training">-</div></div>
                             <div class="detail-item"><label>Connector Search</label><div id="privacy-connectors">-</div></div>
                             <div class="detail-item"><label>Voice</label><div id="privacy-voice">-</div></div>
+                            <div class="detail-item"><label>MFA</label><div id="account-mfa">-</div></div>
+                            <div class="detail-item"><label>Identity Mode</label><div id="identity-mode">-</div></div>
                             <div class="detail-item"><label>Session Access</label><div id="session-access">-</div></div>
                             <div class="detail-item"><label>Last Check</label><div class="font-mono" id="account-checked-at">-</div></div>
                         </div>
@@ -957,6 +982,17 @@
         function booleanLabel(value) {
             if (value === null || value === undefined) return 'Not reported';
             return value ? 'Enabled' : 'Disabled';
+        }
+
+        function friendlyPlan(value) {
+            if (!value) return 'Not reported';
+            return String(value)
+                .replace(/^chatgpt/i, 'ChatGPT ')
+                .replace(/plan$/i, '')
+                .replace(/[_-]+/g, ' ')
+                .replace(/\b\w/g, char => char.toUpperCase())
+                .replace(/\s+/g, ' ')
+                .trim();
         }
         
         function setTheme(isLight) {
@@ -1362,26 +1398,73 @@
                 const runtime = data.runtime || {};
                 const token = runtime.access_token || {};
                 const cookie = runtime.session_cookie || {};
+                const endpointHealth = data.endpoint_health || {};
+                const dataQuality = data.data_quality || {};
                 const accountWarnings = Array.isArray(data.warnings) ? data.warnings : [];
                 const accountWarning = document.getElementById('account-warning');
+                const isGuest = profile.identity_level === 'guest_session' || dataQuality.identity === 'guest';
+                const dataStatus = document.getElementById('data-status');
+                const healthList = document.getElementById('endpoint-health-list');
 
-                accountWarning.textContent = accountWarnings.join(' · ');
-                accountWarning.style.display = accountWarnings.length ? 'block' : 'none';
+                dataStatus.className = dataQuality.state === 'complete'
+                    ? 'status-badge online'
+                    : 'status-badge warning';
+                dataStatus.textContent = dataQuality.state === 'complete'
+                    ? '● Complete data'
+                    : '● Partial data';
 
-                document.getElementById('account-name').textContent = profile.name || 'Authenticated Account';
-                document.getElementById('account-email').textContent = profile.email || 'Email not reported';
-                document.getElementById('account-id').textContent = account.id || '-';
-                document.getElementById('account-role').textContent = account.role || '-';
-                document.getElementById('account-plan').textContent = account.plan_type || '-';
+                healthList.replaceChildren();
+                Object.entries(endpointHealth).forEach(([name, health]) => {
+                    const pill = document.createElement('span');
+                    pill.className = `endpoint-health-pill ${health.state || 'error'}`;
+                    pill.textContent = `${name} HTTP ${health.status ?? 'unknown'}`;
+                    pill.title = health.required ? 'Required endpoint' : 'Optional endpoint';
+                    healthList.appendChild(pill);
+                });
+                const availableCount = Object.values(endpointHealth)
+                    .filter(health => health.state === 'available').length;
+                document.getElementById('account-health-summary').textContent =
+                    `${availableCount}/${Object.keys(endpointHealth).length} endpoints available`;
+                accountWarning.textContent = accountWarnings.length
+                    ? `${accountWarnings.join(' · ')}. Core profile, plan, and runtime data remain available.`
+                    : 'All account discovery endpoints are available.';
+
+                document.getElementById('account-name').textContent =
+                    profile.name || (isGuest ? 'Guest Session Account' : 'Authenticated Account');
+                document.getElementById('account-email').textContent =
+                    profile.email || (isGuest
+                        ? 'ChatGPT guest session · email and display name are not exposed upstream'
+                        : 'Email not reported by the profile endpoint');
+                document.getElementById('profile-id').textContent =
+                    profile.id || account.user_id || 'Not reported';
+                document.getElementById('account-id').textContent =
+                    account.id || (isGuest ? 'Not issued for guest plan' : 'Not reported');
+                document.getElementById('account-role').textContent =
+                    account.role || 'Not reported';
+                document.getElementById('account-plan').textContent =
+                    friendlyPlan(account.plan_type);
                 document.getElementById('account-entitlement').textContent =
-                    `${entitlement.subscription_plan || 'Not reported'} · ${entitlement.has_active_subscription ? 'active' : 'inactive'}`;
+                    `${friendlyPlan(entitlement.subscription_plan)} · ${entitlement.has_active_subscription ? 'active' : 'inactive'}`;
                 document.getElementById('account-location').textContent =
-                    [profile.region, profile.region_code, profile.country].filter(Boolean).join(', ') || '-';
-                document.getElementById('account-mfa').textContent = profile.mfa_enabled ? 'Enabled' : 'Disabled';
-                document.getElementById('account-structure').textContent = account.structure || '-';
-                document.getElementById('account-residency').textContent = account.residency || '-';
+                    [profile.region, profile.region_code, profile.country]
+                        .filter(Boolean).join(', ') || 'Not reported';
+                document.getElementById('account-mfa').textContent =
+                    booleanLabel(profile.mfa_enabled);
+                document.getElementById('account-structure').textContent =
+                    [account.name, account.structure, account.workspace_type]
+                        .filter(Boolean).join(' · ') || 'Not reported';
+                document.getElementById('account-residency').textContent =
+                    account.residency || 'Not reported';
+                document.getElementById('account-state').textContent =
+                    account.is_deactivated ? 'Deactivated' : 'Active';
+                document.getElementById('profile-created').textContent =
+                    profile.created_at
+                        ? new Date(profile.created_at).toLocaleString()
+                        : 'Not reported';
                 document.getElementById('account-feature-count').textContent = `${data.feature_count ?? 0} reported`;
                 document.getElementById('session-access').textContent = data.can_access_with_session ? 'Allowed' : 'Denied';
+                document.getElementById('identity-mode').textContent =
+                    isGuest ? 'Guest cookie session' : 'Identified account';
                 document.getElementById('account-checked-at').textContent =
                     data.checked_at ? new Date(data.checked_at).toLocaleString() : '-';
 
@@ -1419,13 +1502,12 @@
                     warning.textContent = `Hosted bearer renewal is manual. Cookie lifetime: ${formatDuration(cookie.seconds_remaining)}.`;
                 }
             } catch (error) {
-                const authStatus = document.getElementById('auth-status');
-                authStatus.className = 'status-badge error';
-                authStatus.textContent = '● Account API Error';
+                const dataStatus = document.getElementById('data-status');
+                dataStatus.className = 'status-badge error';
+                dataStatus.textContent = '● Account API error';
                 document.getElementById('account-email').textContent = error.message;
                 const accountWarning = document.getElementById('account-warning');
                 accountWarning.textContent = error.message;
-                accountWarning.style.display = 'block';
             }
         }
 
@@ -1439,11 +1521,11 @@
                 
                 if (data.is_authenticated) {
                     authStatus.className = 'status-badge online';
-                    authStatus.innerHTML = '● Validated';
+                    authStatus.textContent = '● Session active';
                     document.getElementById('auth-path').textContent = data.auth_file_path;
                 } else {
                     authStatus.className = 'status-badge error';
-                    authStatus.innerHTML = '● Missing Auth';
+                    authStatus.textContent = '● Missing auth';
                 }
             } catch (e) {}
         }

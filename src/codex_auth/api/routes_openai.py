@@ -409,6 +409,26 @@ async def openai_chat_completions(req: ChatCompletionRequest):
     requested_model = req.model
     if requested_model.endswith("-vision"):
         requested_model = requested_model[:-7]
+    if req.tools or (req.tool_choice is not None and req.tool_choice != "none"):
+        detail = {
+            "message": "OpenAI function tools and tool_choice are not implemented by this proxy",
+            "type": "unsupported_feature",
+        }
+        logger.info(
+            "[API] Request rejected - unsupported function tools",
+            extra={
+                "trace_data": _trace_data(
+                    req,
+                    requested_model,
+                    json.dumps({"error": detail}),
+                    0,
+                    0,
+                    status=501,
+                ),
+                "request_id": request_id,
+            },
+        )
+        raise HTTPException(status_code=501, detail=detail)
     try:
         selection = registry.select(requested_model, req.provider)
     except ProviderError as exc:
@@ -431,30 +451,6 @@ async def openai_chat_completions(req: ChatCompletionRequest):
         if selection.provider_id == registry.default_provider_id and req.provider is None and ":" not in req.model
         else f"{selection.provider_id}:{provider_model}"
     )
-    if req.tools or (req.tool_choice is not None and req.tool_choice != "none"):
-        detail = {
-            "message": "OpenAI function tools and tool_choice are not implemented by this proxy",
-            "type": "unsupported_feature",
-        }
-        logger.info(
-            "[API] Request rejected - unsupported function tools",
-            extra={
-                "trace_data": _trace_data(
-                    req,
-                    requested_model,
-                    json.dumps({"error": detail}),
-                    0,
-                    0,
-                    status=501,
-                ),
-                "request_id": request_id,
-            },
-        )
-        raise HTTPException(
-            status_code=501,
-            detail=detail,
-        )
-
     prompt, files = _request_input(req.messages)
 
     def get_token_count(text: str) -> int:

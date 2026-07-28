@@ -182,6 +182,10 @@ def test_non_streaming_route_requests_canonical_buffered_generation(monkeypatch)
         "codex_auth.api.routes_openai.provider.generate_stream",
         fake_generate_stream,
     )
+    monkeypatch.setattr(
+        "codex_auth.api.routes_openai.provider.is_configured",
+        lambda: True,
+    )
     monkeypatch.setattr("codex_auth.api.routes_openai.record_usage", lambda *args, **kwargs: None)
     request = ChatCompletionRequest(
         model="gpt-test",
@@ -221,7 +225,4 @@ def test_canonical_response_prefers_requested_assistant_message():
         }
     }
 
-    assert (
-        OpenAIProvider._canonical_assistant_text(conversation, "assistant-new")
-        == "complete multimodal answer"
-    )
+    assert OpenAIProvider._canonical_assistant_text(conversation, "assistant-new") == "complete multimodal answer"

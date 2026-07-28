@@ -82,6 +82,7 @@ def test_completion_response_is_available_on_exact_http_log_row(monkeypatch):
 
     monkeypatch.setenv("CODEX_AUTH_API_KEY", "test-key")
     monkeypatch.setattr(provider, "generate_stream", fake_generate_stream)
+    monkeypatch.setattr(provider, "is_configured", lambda: True)
     handler = StreamHandler()
     api_logger = logging.getLogger("codex_auth")
     previous_level = api_logger.level
@@ -107,9 +108,7 @@ def test_completion_response_is_available_on_exact_http_log_row(monkeypatch):
 
     request_id = response.headers["x-request-id"]
     request_log = next(
-        entry
-        for entry in reversed(logs)
-        if entry.get("request_id") == request_id and entry.get("is_http")
+        entry for entry in reversed(logs) if entry.get("request_id") == request_id and entry.get("is_http")
     )
     assert response.status_code == 200
     assert request_log["path"] == "/v1/chat/completions"
@@ -129,6 +128,7 @@ def test_upstream_error_payload_is_captured_on_failed_http_row(monkeypatch):
 
     monkeypatch.setenv("CODEX_AUTH_API_KEY", "test-key")
     monkeypatch.setattr(provider, "generate_stream", failing_generate_stream)
+    monkeypatch.setattr(provider, "is_configured", lambda: True)
     handler = StreamHandler()
     api_logger = logging.getLogger("codex_auth")
     previous_level = api_logger.level

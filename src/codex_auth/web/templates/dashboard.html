@@ -488,8 +488,8 @@
         .slide-panel {
             position: fixed;
             top: 0;
-            right: -800px;
-            width: 800px;
+            right: min(-880px, -92vw);
+            width: min(880px, 92vw);
             height: 100vh;
             background-color: var(--bg-base);
             border-left: 1px solid var(--border-strong);
@@ -548,12 +548,20 @@
             word-wrap: break-word;
             margin-bottom: 24px;
             overflow-x: auto;
+            min-height: 54px;
         }
         
-        .panel-metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+        .panel-metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }
         .panel-metric { background: var(--bg-code); border: 1px solid var(--border-subtle); padding: 12px; border-radius: 6px; }
         .panel-metric label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; }
         .panel-metric div { font-size: 16px; font-weight: 600; font-family: var(--font-mono); margin-top: 4px; }
+        .trace-section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+        .trace-section-header h4 { margin: 0; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .06em; }
+        .trace-meta { color: var(--text-tertiary); font: 11px var(--font-mono); }
+        .trace-request-id { margin: 0 0 24px; color: var(--text-tertiary); font: 11px var(--font-mono); overflow-wrap: anywhere; }
+        .trace-copy-btn { border: 1px solid var(--border-strong); border-radius: 6px; padding: 5px 9px; color: var(--text-secondary); background: var(--bg-surface); cursor: pointer; font-size: 11px; }
+        .trace-copy-btn:hover { color: var(--text-primary); background: var(--bg-surface-hover); }
+        .trace-indicator { width: 7px; height: 7px; margin-right: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
         
         .toggle-container {
             display: flex;
@@ -574,6 +582,8 @@
 
         @media (max-width: 720px) {
             .detail-grid { grid-template-columns: 1fr; }
+            .panel-metric-grid { grid-template-columns: repeat(2, 1fr); }
+            .slide-panel { width: 100vw; right: -100vw; }
         }
     </style>
 </head>
@@ -856,16 +866,36 @@
                         <label>Latency</label>
                         <div id="trace-latency">-</div>
                     </div>
+                    <div class="panel-metric">
+                        <label>Tokens</label>
+                        <div id="trace-tokens">-</div>
+                    </div>
+                    <div class="panel-metric">
+                        <label>Mode</label>
+                        <div id="trace-mode">-</div>
+                    </div>
                 </div>
-                <h4 style="font-size: 12px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 8px;">Log Message</h4>
+                <div class="trace-request-id" id="trace-request-id">Request ID: -</div>
+                <div class="trace-section-header"><h4>Log Message</h4></div>
                 <div class="json-block" id="trace-message"></div>
             </div>
             
             <div id="tab-payload" class="panel-pane">
+                <div class="trace-section-header">
+                    <h4>Sanitized Request Payload</h4>
+                    <button class="trace-copy-btn" onclick="copyTraceValue('trace-messages', this)">Copy</button>
+                </div>
                 <div class="json-block" id="trace-messages"></div>
             </div>
             
             <div id="tab-response" class="panel-pane">
+                <div class="trace-section-header">
+                    <h4>Captured Response</h4>
+                    <div>
+                        <span class="trace-meta" id="trace-response-meta"></span>
+                        <button class="trace-copy-btn" onclick="copyTraceValue('trace-response', this)">Copy</button>
+                    </div>
+                </div>
                 <div class="json-block" id="trace-response"></div>
             </div>
         </div>
@@ -1005,7 +1035,8 @@
             
             const status = trace.status || log.status || '-';
             const statusClass = status.toString().startsWith('2') ? 'status-2xx' : 
-                                status.toString().startsWith('4') || status.toString().startsWith('5') ? 'status-5xx' : 'status-3xx';
+                                status.toString().startsWith('4') ? 'status-4xx' :
+                                status.toString().startsWith('5') ? 'status-5xx' : 'status-3xx';
             document.getElementById('trace-header-status').className = `http-status ${statusClass}`;
             document.getElementById('trace-header-status').textContent = status;
             
@@ -1015,12 +1046,35 @@
             document.getElementById('trace-model').textContent = trace.model || '-';
             document.getElementById('trace-ttft').textContent = trace.ttft_ms ? trace.ttft_ms + ' ms' : '-';
             document.getElementById('trace-gen').textContent = trace.generation_s ? trace.generation_s + ' s' : '-';
-            document.getElementById('trace-message').textContent = log.message;
+            document.getElementById('trace-tokens').textContent =
+                trace.total_tokens !== undefined ? `${trace.total_tokens} total` : '-';
+            document.getElementById('trace-mode').textContent =
+                trace.stream === undefined ? '-' : `${trace.stream ? 'Stream' : 'Buffered'}${trace.web_search ? ' + Search' : ''}`;
+            document.getElementById('trace-request-id').textContent =
+                `Request ID: ${trace.request_id || log.request_id || '-'}`;
+            document.getElementById('trace-message').textContent = log.trace_message || log.message;
             
-            document.getElementById('trace-messages').textContent = trace.messages ? JSON.stringify(trace.messages, null, 2) : 'No payload captured.';
-            document.getElementById('trace-response').textContent = trace.response || 'No response captured.';
+            document.getElementById('trace-messages').textContent = trace.messages ? JSON.stringify(trace.messages, null, 2) : 'No payload captured for this route.';
+            document.getElementById('trace-response').textContent =
+                trace.response || (log.is_http ? 'Response body capture is not enabled for this route.' : 'No response captured.');
+            const responseCharacters = trace.response_characters ?? trace.response?.length;
+            document.getElementById('trace-response-meta').textContent = responseCharacters === undefined
+                ? ''
+                : `${responseCharacters.toLocaleString()} chars${trace.response_truncated ? ' · truncated at 8 KB' : ''} · `;
             
             document.getElementById('trace-panel').classList.add('open');
+        }
+
+        async function copyTraceValue(elementId, button) {
+            const text = document.getElementById(elementId).textContent;
+            try {
+                await navigator.clipboard.writeText(text);
+                const original = button.textContent;
+                button.textContent = 'Copied';
+                setTimeout(() => { button.textContent = original; }, 1200);
+            } catch {
+                button.textContent = 'Copy failed';
+            }
         }
 
         function closeTracePanel() {
@@ -1048,21 +1102,26 @@
         const autoScrollToggle = document.getElementById('auto-scroll');
         let lastLogSequence = 0;
         let logIndexCounter = 0;
+        const renderedLogsBySequence = new Map();
 
         function renderLog(log) {
             const div = document.createElement('div');
             const hasTrace = !!log.trace_data;
             div.className = 'log-row ' + (hasTrace ? 'has-trace' : '');
+            div.dataset.sequence = Number(log.sequence || 0);
             
             if (log.is_http) {
                 const mClass = (log.method || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
                 const statusStr = (log.status || '').toString();
-                const statusClass = statusStr.startsWith('2') ? 'status-2xx' : statusStr.startsWith('4') || statusStr.startsWith('5') ? 'status-5xx' : 'status-3xx';
+                const statusClass = statusStr.startsWith('2') ? 'status-2xx' :
+                    statusStr.startsWith('4') ? 'status-4xx' :
+                    statusStr.startsWith('5') ? 'status-5xx' : 'status-3xx';
                 
                 div.innerHTML = `
                     <span class="log-time">${escapeHtml(log.time || '')}</span>
                     <span class="http-method method-${mClass}">${escapeHtml(log.method || '')}</span>
                     <span class="http-path">${escapeHtml(log.path || '')}</span>
+                    ${hasTrace ? '<span class="trace-indicator" title="Payload and response captured"></span>' : ''}
                     <span class="http-status ${statusClass}">${escapeHtml(statusStr)}</span>
                     <span class="http-latency">${escapeHtml(log.latency_ms ?? '')}ms</span>
                 `;
@@ -1081,7 +1140,28 @@
                 div.dataset.index = idx;
                 div.onclick = () => openTracePanel(idx);
             }
+            renderedLogsBySequence.set(Number(log.sequence || 0), div);
             return div;
+        }
+
+        function reconcileCapturedTrace(log) {
+            if (!log.trace_data) return;
+            const row = renderedLogsBySequence.get(Number(log.sequence || 0));
+            if (!row) return;
+            let index = row.dataset.index;
+            if (index === undefined) {
+                index = logIndexCounter++;
+                row.dataset.index = index;
+                row.onclick = () => openTracePanel(Number(index));
+            }
+            traceDataMap.set(Number(index), log);
+            row.classList.add('has-trace');
+            if (!row.querySelector('.trace-indicator') && log.is_http) {
+                const indicator = document.createElement('span');
+                indicator.className = 'trace-indicator';
+                indicator.title = 'Payload and response captured';
+                row.querySelector('.http-status')?.before(indicator);
+            }
         }
 
         async function fetchLogs() {
@@ -1091,6 +1171,7 @@
                 setDisconnected(false);
                 const data = await res.json();
                 const logs = data.logs || [];
+                logs.forEach(reconcileCapturedTrace);
 
                 const newLogs = logs.filter(log => Number(log.sequence || 0) > lastLogSequence);
                 if (newLogs.length) {
@@ -1102,6 +1183,7 @@
                         if (oldest?.dataset.index) {
                             traceDataMap.delete(Number(oldest.dataset.index));
                         }
+                        renderedLogsBySequence.delete(Number(oldest?.dataset.sequence || 0));
                         oldest?.remove();
                     }
                     lastLogSequence = Math.max(

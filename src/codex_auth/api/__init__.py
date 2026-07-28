@@ -6,7 +6,7 @@ import secrets
 import threading
 import time
 import webbrowser
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,10 +15,14 @@ from fastapi.responses import JSONResponse
 from rich.logging import RichHandler
 
 from ..providers.openai.provider import provider
+from .trace_context import request_trace_id
 
 # Store the last 500 logs in memory for the UI dashboard
 log_stream = deque(maxlen=500)
 log_sequence = itertools.count(1)
+pending_request_traces = OrderedDict()
+log_stream_lock = threading.Lock()
+MAX_PENDING_REQUEST_TRACES = 100
 MAX_REQUEST_BODY_BYTES = 30 * 1024 * 1024
 
 class StreamHandler(logging.Handler):
@@ -34,15 +38,39 @@ class StreamHandler(logging.Handler):
                 "level": record.levelname,
                 "message": msg_clean
             }
-            if hasattr(record, 'trace_data'):
-                log_entry['trace_data'] = record.trace_data
+            request_id = getattr(record, "request_id", "")
+            if request_id:
+                log_entry["request_id"] = request_id
+            trace_data = getattr(record, "trace_data", None)
+            if trace_data:
+                trace_data = dict(trace_data)
+                if request_id:
+                    trace_data.setdefault("request_id", request_id)
             if hasattr(record, 'is_http'):
                 log_entry['is_http'] = True
                 log_entry['method'] = getattr(record, 'method', '')
                 log_entry['path'] = getattr(record, 'path', '')
                 log_entry['status'] = getattr(record, 'status', 0)
                 log_entry['latency_ms'] = getattr(record, 'latency_ms', 0)
-            log_stream.append(log_entry)
+            with log_stream_lock:
+                if trace_data and request_id:
+                    for existing in reversed(log_stream):
+                        if existing.get("is_http") and existing.get("request_id") == request_id:
+                            existing["trace_data"] = trace_data
+                            existing["trace_message"] = msg_clean
+                            return
+                    pending_request_traces[request_id] = (trace_data, msg_clean)
+                    pending_request_traces.move_to_end(request_id)
+                    while len(pending_request_traces) > MAX_PENDING_REQUEST_TRACES:
+                        pending_request_traces.popitem(last=False)
+                    return
+                if log_entry.get("is_http") and request_id:
+                    pending = pending_request_traces.pop(request_id, None)
+                    if pending:
+                        log_entry["trace_data"], log_entry["trace_message"] = pending
+                elif trace_data:
+                    log_entry["trace_data"] = trace_data
+                log_stream.append(log_entry)
         except Exception:
             pass
 
@@ -136,36 +164,44 @@ async def log_requests(request: Request, call_next):
                 content={"error": {"message": "Invalid Content-Length header", "type": "invalid_request"}},
             )
 
+    request_id = secrets.token_hex(8)
+    request.state.request_id = request_id
+    trace_token = request_trace_id.set(request_id)
     start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
 
-    if request.url.path in {"/dashboard", "/login", "/healthz"} or request.url.path.startswith(
-        ("/api/", "/v1/", "/backend-api/")
-    ):
-        response.headers["Cache-Control"] = "no-store, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    
-    path = request.url.path
-    quiet_paths = {
-        "/dashboard",
-        "/api/logs",
-        "/api/usage",
-        "/api/status",
-        "/api/account",
-        "/api/models_list",
-    }
-    if path not in quiet_paths:
-        logger.info(f"{request.method} {path} {response.status_code}", extra={
-            "is_http": True,
-            "method": request.method,
-            "path": path,
-            "status": response.status_code,
-            "latency_ms": round(process_time * 1000, 2)
-        })
-    
-    return response
+        if request.url.path in {"/dashboard", "/login", "/healthz"} or request.url.path.startswith(
+            ("/api/", "/v1/", "/backend-api/")
+        ):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Request-ID"] = request_id
+
+        path = request.url.path
+        quiet_paths = {
+            "/dashboard",
+            "/api/logs",
+            "/api/usage",
+            "/api/status",
+            "/api/account",
+            "/api/models_list",
+        }
+        if path not in quiet_paths:
+            logger.info(f"{request.method} {path} {response.status_code}", extra={
+                "is_http": True,
+                "request_id": request_id,
+                "method": request.method,
+                "path": path,
+                "status": response.status_code,
+                "latency_ms": round(process_time * 1000, 2)
+            })
+
+        return response
+    finally:
+        request_trace_id.reset(trace_token)
 
 app.add_middleware(
     CORSMiddleware,

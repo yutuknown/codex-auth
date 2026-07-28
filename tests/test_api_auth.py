@@ -48,6 +48,7 @@ def test_root_head_redirects_instead_of_returning_method_not_allowed():
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
+    assert len(response.headers["x-request-id"]) == 16
 
 
 def test_oversized_request_is_rejected_before_body_parsing(monkeypatch):

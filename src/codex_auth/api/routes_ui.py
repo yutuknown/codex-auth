@@ -105,8 +105,9 @@ async def serve_dashboard():
 @router.get("/api/logs")
 async def get_logs():
     # Import log_stream inside the route to avoid circular imports
-    from . import log_stream
-    return {"logs": list(log_stream)}
+    from . import log_stream, log_stream_lock
+    with log_stream_lock:
+        return {"logs": [dict(entry) for entry in log_stream]}
 
 @router.get("/api/usage")
 async def get_usage():

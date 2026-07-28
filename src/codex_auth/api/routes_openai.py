@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..providers.openai.provider import ChatGPTSessionError, ProviderBusyError, provider
 from ..usage import record_usage
+from .trace_context import request_trace_id
 
 router = APIRouter()
 logger = logging.getLogger("codex_auth")
@@ -109,18 +110,27 @@ def _trace_data(
     response: str,
     ttft_ms: int,
     generation_s: float,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    status: int = 200,
 ) -> dict[str, Any]:
     limit = 8000
     return {
         "method": "POST",
-        "status": 200,
+        "status": status,
         "path": "/v1/chat/completions",
         "model": requested_model,
         "messages": _trace_messages(req.messages),
         "response": response[:limit],
         "response_truncated": len(response) > limit,
+        "response_characters": len(response),
         "ttft_ms": ttft_ms,
         "generation_s": round(generation_s, 2),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "stream": req.stream,
+        "web_search": req.web_search,
     }
 
 @router.get("/v1/models")
@@ -173,17 +183,30 @@ async def proxy_backend_api(path: str, request: Request):
 
 @router.post("/v1/chat/completions")
 async def openai_chat_completions(req: ChatCompletionRequest):
-    if req.tools or (req.tool_choice is not None and req.tool_choice != "none"):
-        raise HTTPException(
-            status_code=501,
-            detail={
-                "message": "OpenAI function tools and tool_choice are not implemented by this proxy",
-                "type": "unsupported_feature",
-            },
-        )
+    request_id = request_trace_id.get()
     requested_model = req.model
     if requested_model.endswith("-vision"):
         requested_model = requested_model[:-7]
+    if req.tools or (req.tool_choice is not None and req.tool_choice != "none"):
+        detail = {
+            "message": "OpenAI function tools and tool_choice are not implemented by this proxy",
+            "type": "unsupported_feature",
+        }
+        logger.info("[API] Request rejected - unsupported function tools", extra={
+            "trace_data": _trace_data(
+                req,
+                requested_model,
+                json.dumps({"error": detail}),
+                0,
+                0,
+                status=501,
+            ),
+            "request_id": request_id,
+        })
+        raise HTTPException(
+            status_code=501,
+            detail=detail,
+        )
     
     prompt, files = _request_input(req.messages)
     
@@ -269,17 +292,20 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                 # Record Usage after stream finishes
                 try:
                     record_usage(requested_model, prompt_tokens, completion_tokens, ttft_s, generation_s)
-                    logger.info(f"[API] Stream completed - TTFT: {ttft_s*1000:.0f}ms - {completion_tokens} tok", extra={
-                        "trace_data": _trace_data(
-                            req,
-                            requested_model,
-                            full_response,
-                            round(ttft_s * 1000),
-                            generation_s,
-                        )
-                    })
                 except Exception as e:
                     logger.error(f"[API] Failed to record usage: {e}")
+                logger.info(f"[API] Stream completed - TTFT: {ttft_s*1000:.0f}ms - {completion_tokens} tok", extra={
+                    "trace_data": _trace_data(
+                        req,
+                        requested_model,
+                        full_response,
+                        round(ttft_s * 1000),
+                        generation_s,
+                        prompt_tokens,
+                        completion_tokens,
+                    ),
+                    "request_id": request_id,
+                })
                     
             except ProviderBusyError as e:
                 err = {"error": {"message": str(e), "type": "rate_limit_error", "code": 429}}
@@ -315,17 +341,20 @@ async def openai_chat_completions(req: ChatCompletionRequest):
             try:
                 # TTFT is same as full generation time for non-streaming
                 record_usage(requested_model, prompt_tokens, completion_tokens, generation_s, generation_s)
-                logger.info(f"[API] Request completed - {completion_tokens} tok", extra={
-                    "trace_data": _trace_data(
-                        req,
-                        requested_model,
-                        full_response,
-                        round(generation_s * 1000),
-                        generation_s,
-                    )
-                })
             except Exception as e:
                 logger.error(f"[API] Failed to record usage: {e}")
+            logger.info(f"[API] Request completed - {completion_tokens} tok", extra={
+                "trace_data": _trace_data(
+                    req,
+                    requested_model,
+                    full_response,
+                    round(generation_s * 1000),
+                    generation_s,
+                    prompt_tokens,
+                    completion_tokens,
+                ),
+                "request_id": request_id,
+            })
 
             return {
                 "id": "chatcmpl-stealth",

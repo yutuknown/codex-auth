@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import urllib.parse
@@ -217,6 +218,9 @@ class Microsoft365CopilotProvider(BaseProvider):
         self._model_tones = dict(MODEL_TONES)
         self.default_model = "auto"
         self.model_catalog_source = "fallback"
+        self.last_generation_refresh_at = 0.0
+        self.last_generation_refresh_error = ""
+        self.generation_refresh_in_progress = False
 
     def is_configured(self) -> bool:
         return provider_cookies_are_configured(self.provider_id)
@@ -261,7 +265,11 @@ class Microsoft365CopilotProvider(BaseProvider):
             or not self.access_token_expires_at
             or self.access_token_expires_at <= time.time() + 300
         ):
-            self._refresh_access_token_sync()
+            try:
+                self._refresh_access_token_sync()
+            except (ProviderUpstreamError, ProviderNotConfiguredError) as exc:
+                self._record_generation_refresh_failure(str(exc))
+                logger.warning("[Microsoft 365] Generation credential refresh deferred: %s", exc)
 
     @property
     def refresh_configured(self) -> bool:
@@ -332,9 +340,83 @@ class Microsoft365CopilotProvider(BaseProvider):
                 "expires_at": self.access_token_expires_at,
             }
         )
+        # Environment secrets win over files on Render. Updating the process
+        # copy keeps the rotated pair usable until the next restart.
+        os.environ["CODEX_AUTH_M365_AUTH_JSON"] = json.dumps(updated_auth, separators=(",", ":"))
+        os.environ["CODEX_AUTH_M365_OAUTH_JSON"] = json.dumps(updated_oauth, separators=(",", ":"))
         save_m365_oauth_data(updated_oauth)
         save_m365_auth_data(updated_auth)
+        self.last_generation_refresh_at = float(captured_at)
+        self.last_generation_refresh_error = ""
         logger.info("[Microsoft 365] OAuth access and refresh tokens rotated")
+
+    def _record_generation_refresh_failure(self, message: str) -> None:
+        self.last_generation_refresh_error = message
+
+    @staticmethod
+    def _validate_generation_credentials(auth: dict[str, Any], oauth: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        access_token = str(auth.get("access_token") or "").strip()
+        identity = str(auth.get("identity") or "").strip()
+        if not access_token or not identity:
+            raise ValueError("M365 auth JSON must include non-empty access_token and identity fields")
+        endpoint = str(oauth.get("token_endpoint") or "")
+        form = oauth.get("form")
+        if not Microsoft365CopilotProvider._is_valid_oauth_endpoint(endpoint):
+            raise ValueError("M365 refresh JSON must use a Microsoft OAuth v2 token endpoint")
+        if not isinstance(form, dict) or not str(form.get("refresh_token") or "").strip():
+            raise ValueError("M365 refresh JSON must include form.refresh_token")
+        if form.get("grant_type") not in {None, "refresh_token"}:
+            raise ValueError("M365 refresh JSON must use grant_type=refresh_token")
+        normalized_auth = dict(auth)
+        captured_at = int(normalized_auth.get("captured_at") or time.time())
+        expires_in = int(normalized_auth.get("expires_in") or 0)
+        if not normalized_auth.get("expires_at") and expires_in > 0:
+            normalized_auth["expires_at"] = captured_at + expires_in
+        normalized_auth["captured_at"] = captured_at
+        normalized_oauth = dict(oauth)
+        normalized_oauth["form"] = {**form, "grant_type": "refresh_token"}
+        return normalized_auth, normalized_oauth
+
+    async def replace_generation_credentials(self, auth: dict[str, Any], oauth: dict[str, Any]) -> dict[str, Any]:
+        auth, oauth = self._validate_generation_credentials(auth, oauth)
+        os.environ["CODEX_AUTH_M365_AUTH_JSON"] = json.dumps(auth, separators=(",", ":"))
+        os.environ["CODEX_AUTH_M365_OAUTH_JSON"] = json.dumps(oauth, separators=(",", ":"))
+        try:
+            await asyncio.to_thread(save_m365_auth_data, auth)
+            await asyncio.to_thread(save_m365_oauth_data, oauth)
+        except OSError as exc:
+            logger.warning("[Microsoft 365] Credential files were not persisted: %s", exc)
+        async with self.lock:
+            self.access_token = str(auth["access_token"])
+            self.access_token_expires_at = float(auth.get("expires_at") or 0)
+            self.identity = str(auth["identity"])
+            self.variants = str(auth.get("variants") or self.variants)
+            self.last_generation_refresh_error = ""
+        return self.generation_credential_status()
+
+    async def refresh_generation_credentials(self) -> dict[str, Any]:
+        self.generation_refresh_in_progress = True
+        try:
+            if not self.initialized:
+                await self.initialize()
+            await asyncio.to_thread(self._refresh_access_token_sync)
+        except (ProviderUpstreamError, ProviderNotConfiguredError) as exc:
+            self._record_generation_refresh_failure(str(exc))
+        finally:
+            self.generation_refresh_in_progress = False
+        return self.generation_credential_status()
+
+    async def clear_generation_credentials(self) -> dict[str, Any]:
+        os.environ.pop("CODEX_AUTH_M365_AUTH_JSON", None)
+        os.environ.pop("CODEX_AUTH_M365_OAUTH_JSON", None)
+        async with self.lock:
+            self.access_token = ""
+            self.access_token_expires_at = 0.0
+            self.identity = ""
+            self.variants = ""
+            self.last_generation_refresh_at = 0.0
+            self.last_generation_refresh_error = ""
+        return self.generation_credential_status()
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self._initialize_sync)
@@ -368,7 +450,34 @@ class Microsoft365CopilotProvider(BaseProvider):
 
     @property
     def generation_ready(self) -> bool:
-        return bool(self.access_token and self.identity)
+        return bool(
+            self.access_token
+            and self.identity
+            and (not self.access_token_expires_at or self.access_token_expires_at > time.time())
+        )
+
+    def generation_credential_status(self) -> dict[str, Any]:
+        remaining = max(0, round(self.access_token_expires_at - time.time())) if self.access_token_expires_at else None
+        if self.generation_refresh_in_progress:
+            state = "refreshing"
+        elif self.last_generation_refresh_error:
+            state = "re_import_required" if not self.generation_ready or remaining == 0 else "refresh_failed"
+        elif not self.generation_ready:
+            state = "re_import_required"
+        elif not self.refresh_configured:
+            state = "manual"
+        elif remaining is not None and remaining <= 300:
+            state = "expiring_soon"
+        else:
+            state = "active"
+        return {
+            "state": state,
+            "access_expires_in_seconds": remaining,
+            "refresh_available": self.refresh_configured,
+            "last_refresh_at": int(self.last_generation_refresh_at) if self.last_generation_refresh_at else None,
+            "last_refresh_error": self.last_generation_refresh_error or None,
+            "recovery_action": "re_import" if state in {"re_import_required", "manual"} else "refresh" if state in {"expiring_soon", "refresh_failed"} else None,
+        }
 
     def runtime_status(self) -> dict[str, Any]:
         return {
@@ -378,6 +487,7 @@ class Microsoft365CopilotProvider(BaseProvider):
             "web_session_valid": self.web_session_valid,
             "generation_ready": self.generation_ready,
             "refresh_configured": self.refresh_configured,
+            "generation_credential": self.generation_credential_status(),
             "access_token_expires_in_seconds": max(
                 0,
                 round(self.access_token_expires_at - time.time()),
@@ -557,6 +667,7 @@ class Microsoft365CopilotProvider(BaseProvider):
                 "graph_profile": graph_connection.get("state"),
                 "graph_refresh": "configured" if self.graph_refresh_configured else "manual",
             },
+            "generation_credential": self.generation_credential_status(),
             "runtime": self._safe_runtime_status(runtime),
             "diagnostics": diagnostics,
             "warnings": ([graph_connection["message"]] if graph_connection.get("message") else []),

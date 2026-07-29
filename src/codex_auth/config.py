@@ -109,6 +109,18 @@ def save_m365_oauth_data(data: Dict[str, Any]) -> Path:
     return _atomic_save_json(get_m365_oauth_file(), data)
 
 
+def clear_m365_generation_data() -> list[Path]:
+    """Remove only repository-local M365 generation files, never environment secrets."""
+    removed: list[Path] = []
+    for credential_file in (get_m365_auth_file(), get_m365_oauth_file()):
+        try:
+            credential_file.unlink()
+            removed.append(credential_file)
+        except FileNotFoundError:
+            continue
+    return removed
+
+
 def load_m365_graph_data() -> Dict[str, Any]:
     inline_graph = os.environ.get("CODEX_AUTH_M365_GRAPH_JSON")
     if inline_graph:

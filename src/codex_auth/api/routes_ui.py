@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..config import (
     auth_is_configured,
+    clear_m365_generation_data,
     get_auth_file,
     get_cookie_file,
     save_cookie_text,
@@ -32,6 +33,15 @@ class CookieUpdateRequest(BaseModel):
 class GraphCredentialUpdateRequest(BaseModel):
     graph_json: str = Field(min_length=2, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
     oauth_json: str | None = Field(default=None, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
+
+
+class GenerationCredentialUpdateRequest(BaseModel):
+    auth_json: str = Field(min_length=2, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
+    oauth_json: str = Field(min_length=2, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
+
+
+class CredentialClearRequest(BaseModel):
+    confirm: bool = False
 
 
 LOGIN_PAGE = """<!doctype html>
@@ -443,6 +453,98 @@ async def update_m365_graph_credentials(payload: GraphCredentialUpdateRequest):
             "warning": (
                 "Active now. Also persist CODEX_AUTH_M365_GRAPH_JSON and CODEX_AUTH_M365_GRAPH_OAUTH_JSON on Render."
                 if hosted_on_render
+                else None
+            ),
+        },
+    }
+
+
+@router.post("/api/providers/m365-copilot/generation-credentials")
+async def update_m365_generation_credentials(payload: GenerationCredentialUpdateRequest):
+    """Replace the single active M365 generation bearer and refresh bundle safely."""
+    try:
+        auth_data = json.loads(payload.auth_json)
+        oauth_data = json.loads(payload.oauth_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Generation credentials must be valid JSON objects", "type": "invalid_generation_credentials"},
+        ) from exc
+    if not isinstance(auth_data, dict) or not isinstance(oauth_data, dict):
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Generation credentials must be JSON objects", "type": "invalid_generation_credentials"},
+        )
+
+    from ..providers.runtime import registry
+
+    provider = registry.get("m365-copilot")
+    try:
+        lifecycle = await provider.replace_generation_credentials(auth_data, oauth_data)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": str(exc), "type": "invalid_generation_credentials"},
+        ) from exc
+    snapshot = await provider.fetch_account_snapshot(refresh=False)
+    return {
+        "status": "activated",
+        "provider": "m365-copilot",
+        "generation_credential": lifecycle,
+        "generation_ready": bool((snapshot.get("connection") or {}).get("generation_ready")),
+        "persistence": {
+            "runtime_active": True,
+            "warning": (
+                "Active now. To survive a Render restart or deploy, also update CODEX_AUTH_M365_AUTH_JSON and CODEX_AUTH_M365_OAUTH_JSON."
+                if os.environ.get("RENDER")
+                else None
+            ),
+        },
+    }
+
+
+@router.post("/api/providers/m365-copilot/generation-credentials/refresh")
+async def refresh_m365_generation_credentials():
+    from ..providers.runtime import registry
+
+    provider = registry.get("m365-copilot")
+    lifecycle = await provider.refresh_generation_credentials()
+    return {
+        "provider": "m365-copilot",
+        "generation_credential": lifecycle,
+        "persistence": {
+            "runtime_active": True,
+            "warning": (
+                "A successful refresh is active for this process. Persist the rotated M365 auth and OAuth secrets on Render before the next restart."
+                if os.environ.get("RENDER")
+                else None
+            ),
+        },
+    }
+
+
+@router.delete("/api/providers/m365-copilot/generation-credentials")
+async def clear_m365_generation_credentials(payload: CredentialClearRequest):
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Set confirm=true to clear local M365 generation credentials", "type": "confirmation_required"},
+        )
+    from ..providers.runtime import registry
+
+    provider = registry.get("m365-copilot")
+    lifecycle = await provider.clear_generation_credentials()
+    removed = clear_m365_generation_data()
+    return {
+        "status": "cleared",
+        "provider": "m365-copilot",
+        "generation_credential": lifecycle,
+        "persistence": {
+            "runtime_active": False,
+            "files_removed": len(removed),
+            "warning": (
+                "Render environment secrets were not changed. They will be used again after a restart unless you remove them in Render."
+                if os.environ.get("RENDER")
                 else None
             ),
         },

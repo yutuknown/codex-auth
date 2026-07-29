@@ -949,7 +949,28 @@
                             Cookie values are never returned by the API or written to request logs. Activation is immediate.
                             On Render, persist the matching <span class="font-mono">CODEX_AUTH_COOKIES</span> or <span class="font-mono">CODEX_AUTH_M365_COOKIES</span> secret if the replacement must survive a restart.
                         </p>
-                        <details style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-subtle);">
+                        <details id="m365-generation-credentials" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-subtle);">
+                            <summary style="cursor:pointer;font-weight:700;font-size:13px;">Microsoft 365 generation credentials</summary>
+                            <p style="margin:10px 0 14px;color:var(--text-secondary);font-size:12px;line-height:1.5;">One active personal bearer and renewal bundle for M365 chat generation. Import the existing auth JSON and refresh-exchange JSON together. Values are cleared from this form after submission and never displayed again.</p>
+                            <div class="cookie-update-layout" style="margin-top:0;">
+                                <div>
+                                    <label for="m365-auth-credential-json" class="account-health-title" style="display:block;margin-bottom:8px;">Generation auth JSON</label>
+                                    <textarea id="m365-auth-credential-json" class="cookie-textarea" style="min-height:110px;" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder='{"access_token":"…","identity":"…","expires_at":0}'></textarea>
+                                </div>
+                                <div>
+                                    <label for="m365-oauth-credential-json" class="account-health-title" style="display:block;margin-bottom:8px;">Refresh exchange JSON</label>
+                                    <textarea id="m365-oauth-credential-json" class="cookie-textarea" style="min-height:110px;" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder='{"token_endpoint":"…","form":{"grant_type":"refresh_token","refresh_token":"…"}}'></textarea>
+                                    <div class="cookie-update-actions" style="margin-top:12px;">
+                                        <button id="m365-generation-import-button" class="cookie-submit-button" type="button" onclick="submitM365GenerationCredentials()">Import &amp; replace</button>
+                                        <button id="m365-generation-refresh-button" class="cookie-secondary-button" type="button" onclick="refreshM365GenerationCredentials()">Refresh now</button>
+                                        <button id="m365-generation-clear-button" class="cookie-secondary-button" type="button" onclick="clearM365GenerationCredentials()">Clear local runtime</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="m365-generation-update-result" class="cookie-update-result" role="status" aria-live="polite"></div>
+                            <p class="cookie-security-note">On Render, this dashboard update is temporary until you update <span class="font-mono">CODEX_AUTH_M365_AUTH_JSON</span> and <span class="font-mono">CODEX_AUTH_M365_OAUTH_JSON</span>.</p>
+                        </details>
+                        <details id="m365-graph-credentials" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-subtle);">
                             <summary style="cursor:pointer;font-weight:700;font-size:13px;">Microsoft Graph profile connection (optional)</summary>
                             <p style="margin:10px 0 14px;color:var(--text-secondary);font-size:12px;line-height:1.5;">Adds read-only profile data to the Microsoft 365 provider card. Paste a Graph credential JSON object and, optionally, its refresh-token JSON bundle. These values are never rendered after submission.</p>
                             <div class="cookie-update-layout" style="margin-top:0;">
@@ -1591,6 +1612,90 @@
             result.textContent = message;
         }
 
+        function showM365GenerationUpdateResult(message, type) {
+            const result = document.getElementById('m365-generation-update-result');
+            result.className = `cookie-update-result ${type}`;
+            result.textContent = message;
+        }
+
+        function m365CredentialMessage(lifecycle, persistence) {
+            const state = lifecycle?.state || 'updated';
+            const expiry = lifecycle?.access_expires_in_seconds;
+            const expiryText = typeof expiry === 'number' ? ` Access expiry: ${formatDuration(expiry)}.` : '';
+            const recovery = lifecycle?.recovery_action === 're_import' ? ' Import a new credential bundle.' : '';
+            return `M365 generation credential: ${state.replace(/_/g, ' ')}.${expiryText}${recovery}${persistence?.warning ? ` ${persistence.warning}` : ''}`;
+        }
+
+        async function submitM365GenerationCredentials() {
+            const authInput = document.getElementById('m365-auth-credential-json');
+            const oauthInput = document.getElementById('m365-oauth-credential-json');
+            const button = document.getElementById('m365-generation-import-button');
+            if (!authInput.value.trim() || !oauthInput.value.trim()) {
+                showM365GenerationUpdateResult('Paste both generation auth JSON and refresh exchange JSON.', 'error');
+                return;
+            }
+            button.disabled = true;
+            button.textContent = 'Importing…';
+            try {
+                const response = await fetch('/api/providers/m365-copilot/generation-credentials', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({auth_json: authInput.value, oauth_json: oauthInput.value}),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail?.message || data.message || `Import returned HTTP ${response.status}`);
+                authInput.value = '';
+                oauthInput.value = '';
+                showM365GenerationUpdateResult(m365CredentialMessage(data.generation_credential, data.persistence), 'success');
+                await fetchProviderAccounts(true);
+            } catch (error) {
+                showM365GenerationUpdateResult(`M365 generation import failed: ${error.message}`, 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Import & replace';
+            }
+        }
+
+        async function refreshM365GenerationCredentials() {
+            const button = document.getElementById('m365-generation-refresh-button');
+            button.disabled = true;
+            button.textContent = 'Refreshing…';
+            try {
+                const response = await fetch('/api/providers/m365-copilot/generation-credentials/refresh', {method: 'POST'});
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail?.message || data.message || `Refresh returned HTTP ${response.status}`);
+                const lifecycle = data.generation_credential || {};
+                showM365GenerationUpdateResult(m365CredentialMessage(lifecycle, data.persistence), lifecycle.state === 'active' ? 'success' : 'error');
+                await fetchProviderAccounts(true);
+            } catch (error) {
+                showM365GenerationUpdateResult(`M365 generation refresh failed: ${error.message}`, 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Refresh now';
+            }
+        }
+
+        async function clearM365GenerationCredentials() {
+            if (!window.confirm('Clear the active M365 generation credential from this running service? Render secrets are not changed.')) return;
+            const button = document.getElementById('m365-generation-clear-button');
+            button.disabled = true;
+            try {
+                const response = await fetch('/api/providers/m365-copilot/generation-credentials', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({confirm: true}),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail?.message || data.message || `Clear returned HTTP ${response.status}`);
+                showM365GenerationUpdateResult(`M365 generation credential cleared.${data.persistence?.warning ? ` ${data.persistence.warning}` : ''}`, 'success');
+                await fetchProviderAccounts(true);
+            } catch (error) {
+                showM365GenerationUpdateResult(`M365 generation clear failed: ${error.message}`, 'error');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
         async function submitGraphCredentials() {
             const graphInput = document.getElementById('graph-credential-json');
             const oauthInput = document.getElementById('graph-oauth-json');
@@ -1819,11 +1924,16 @@
                 detail.innerHTML = providerSection('Account details', '<div class="provider-empty">No provider account is available.</div>');
                 return;
             }
+            const m365Controls = document.getElementById('m365-generation-credentials');
+            const m365GraphControls = document.getElementById('m365-graph-credentials');
+            if (m365Controls) m365Controls.hidden = selectedProviderAccountId !== 'm365-copilot';
+            if (m365GraphControls) m365GraphControls.hidden = selectedProviderAccountId !== 'm365-copilot';
             const descriptor = selected.provider || {};
             const connection = selected.connection || {};
             const profileConnection = connection.profile_connection || {};
             const diagnostics = selected.diagnostics || [];
             const warnings = selected.warnings || [];
+            const generationCredential = selected.generation_credential || selected.runtime?.generation_credential || {};
             document.getElementById('selected-provider-title').textContent = descriptor.display_name || selectedProviderAccountId;
             document.getElementById('selected-provider-subtitle').textContent = descriptor.auth_kind || 'Provider account snapshot';
             const status = document.getElementById('selected-provider-status');
@@ -1845,7 +1955,12 @@
                     transport: selected.runtime?.transport,
                     uptime: selected.runtime?.uptime_seconds !== undefined ? formatDuration(selected.runtime.uptime_seconds) : null,
                 }, {live_models: 'Live models', default_model: 'Default model', catalog_source: 'Catalog source'})),
-                providerSection('Credential health', providerRows(selected.credentials, {cookie_session: 'Cookie session', generation_bearer: 'Generation bearer', generation_refresh: 'Bearer renewal', graph_profile: 'Graph profile', graph_refresh: 'Graph renewal'})),
+                providerSection('Credential health', providerRows({
+                    ...selected.credentials,
+                    generation_state: generationCredential.state ? providerStateLabel(generationCredential.state) : null,
+                    access_expiry: typeof generationCredential.access_expires_in_seconds === 'number' ? formatDuration(generationCredential.access_expires_in_seconds) : null,
+                    refresh_action: generationCredential.recovery_action || null,
+                }, {cookie_session: 'Cookie session', generation_bearer: 'Generation bearer', generation_refresh: 'Bearer renewal', graph_profile: 'Graph profile', graph_refresh: 'Graph renewal', generation_state: 'Generation lifecycle', access_expiry: 'Access expiry', refresh_action: 'Recommended action'})),
                 providerSection('Diagnostics', diagnostics.length
                     ? `<div class="provider-diagnostic-list">${diagnostics.map(item => `<span class="provider-diagnostic ${escapeHtml(item.state || '')}" title="${escapeHtml(item.message || '')}">${escapeHtml(item.source || 'Source')} · ${escapeHtml(providerStateLabel(item.state))}${item.status ? ` · HTTP ${escapeHtml(item.status)}` : ''}</span>`).join('')}</div>${warnings.length ? `<div class="account-health-note">${escapeHtml(warnings.join(' · '))}</div>` : ''}`
                     : '<div class="provider-empty">No provider diagnostics reported.</div>'),

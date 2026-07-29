@@ -149,6 +149,16 @@ export or selecting `cookies.txt`. The server validates the replacement against
 the account endpoints before atomically activating it. Cookie values are not
 returned by the API or included in request traces.
 
+For the one active personal Microsoft 365 account, the selected Microsoft 365
+provider card also has a separate **Generation credentials** control. Import
+the existing `m365-auth.json` record and `m365-oauth.json` refresh-exchange
+record together. It reports only lifecycle metadata (`active`, `expiring soon`,
+`refreshing`, `refresh failed`, or `re-import required`), never token values.
+You can refresh the running service immediately or explicitly clear its local
+runtime copy. On Render, dashboard imports and rotated credentials are
+temporary: update both `CODEX_AUTH_M365_AUTH_JSON` and
+`CODEX_AUTH_M365_OAUTH_JSON` secrets to survive a restart or deploy.
+
 ## ☁️ Deploy on Render
 
 The included `Dockerfile` has no browser dependencies, and `render.yaml` uses

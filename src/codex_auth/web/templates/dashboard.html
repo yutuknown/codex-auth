@@ -1798,7 +1798,7 @@
                 card.type = 'button';
                 card.className = `provider-account-card ${providerId === selectedProviderAccountId ? 'selected' : ''}`;
                 card.setAttribute('aria-pressed', String(providerId === selectedProviderAccountId));
-                card.onclick = () => selectProviderAccount(providerId);
+                card.addEventListener('click', () => selectProviderAccount(providerId));
                 const capabilities = capabilityNames(descriptor.capabilities || {}).slice(0, 3);
                 card.innerHTML = `
                     <div class="provider-account-card-header">

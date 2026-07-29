@@ -1164,6 +1164,49 @@ class OpenAIProvider(BaseProvider):
             self._account_cache_time = time.time()
             return details
 
+    async def fetch_account_snapshot(self, *, refresh: bool = False) -> dict[str, Any]:
+        """Expose the existing ChatGPT account discovery in the common UI shape."""
+        details = await self.fetch_account_details(refresh=refresh)
+        runtime = details.get("runtime") or self.runtime_status()
+        data_quality = details.get("data_quality") or {}
+        diagnostics = [
+            {
+                "source": name,
+                "state": health.get("state", "error"),
+                "status": health.get("status"),
+                "required": bool(health.get("required")),
+            }
+            for name, health in (details.get("endpoint_health") or {}).items()
+        ]
+        return {
+            "provider": self.descriptor(),
+            "connection": {
+                "state": "active" if runtime.get("initialized") else "configured",
+                "configured": bool(runtime.get("configured", True)),
+                "initialized": bool(runtime.get("initialized")),
+                "generation_ready": runtime.get("generation_ready", True),
+                "auth_mode": runtime.get("auth_mode"),
+                "data_quality": data_quality.get("state"),
+            },
+            "profile": details.get("profile") or {},
+            "account": details.get("account") or {},
+            "entitlement": details.get("entitlement") or {},
+            "privacy": details.get("privacy") or {},
+            "models": {
+                "count": runtime.get("model_count", 0),
+                "default_model": runtime.get("selected_model") or runtime.get("default_model"),
+                "catalog_source": runtime.get("model_catalog_source") or "/backend-api/models",
+            },
+            "credentials": {
+                "session": "active" if runtime.get("initialized") else "unavailable",
+                "refresh": runtime.get("auth_mode"),
+            },
+            "runtime": self._safe_runtime_status(runtime),
+            "diagnostics": diagnostics,
+            "warnings": details.get("warnings") or [],
+            "checked_at": details.get("checked_at"),
+        }
+
     async def proxy_request(
         self,
         method: str,

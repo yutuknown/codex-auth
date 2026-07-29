@@ -12,10 +12,14 @@ from curl_cffi.requests import Session
 
 from ..config import (
     load_m365_auth_data,
+    load_m365_graph_data,
+    load_m365_graph_oauth_data,
     load_m365_oauth_data,
     load_provider_cookie_text,
     provider_cookies_are_configured,
     save_m365_auth_data,
+    save_m365_graph_data,
+    save_m365_graph_oauth_data,
     save_m365_oauth_data,
 )
 from .base import BaseProvider, ProviderCapabilities
@@ -32,6 +36,10 @@ logger = logging.getLogger("codex_auth")
 WEB_URL = "https://m365.cloud.microsoft/chat"
 CHAT_HUB = "wss://substrate.office.com/m365Copilot/Chathub"
 OAUTH_HOST = "login.microsoftonline.com"
+GRAPH_ME_URL = (
+    "https://graph.microsoft.com/v1.0/me"
+    "?$select=id,displayName,userPrincipalName,mail,jobTitle,officeLocation,preferredLanguage,usageLocation"
+)
 RECORD_SEPARATOR = "\x1e"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -395,6 +403,163 @@ class Microsoft365CopilotProvider(BaseProvider):
                 "file_uploads": False,
                 "function_tools": False,
             },
+        }
+
+    @staticmethod
+    def _is_valid_oauth_endpoint(endpoint: str) -> bool:
+        parsed_endpoint = urllib.parse.urlsplit(endpoint)
+        return (
+            parsed_endpoint.scheme == "https"
+            and parsed_endpoint.hostname == OAUTH_HOST
+            and parsed_endpoint.path.endswith("/oauth2/v2.0/token")
+        )
+
+    @property
+    def graph_refresh_configured(self) -> bool:
+        oauth = load_m365_graph_oauth_data()
+        form = oauth.get("form")
+        return bool(isinstance(form, dict) and form.get("refresh_token") and oauth.get("token_endpoint"))
+
+    def _refresh_graph_access_token_sync(self) -> dict[str, Any]:
+        oauth = load_m365_graph_oauth_data()
+        endpoint = str(oauth.get("token_endpoint") or "")
+        form = oauth.get("form")
+        if not self._is_valid_oauth_endpoint(endpoint) or not isinstance(form, dict) or not form.get("refresh_token"):
+            raise ProviderNotConfiguredError("Microsoft Graph refresh configuration is missing or invalid")
+        session = Session(impersonate="chrome")
+        try:
+            response = session.post(
+                endpoint,
+                params={**dict(oauth.get("query") or {}), "client-request-id": str(uuid.uuid4())},
+                data=form,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+                    "User-Agent": USER_AGENT,
+                },
+                timeout=30,
+            )
+            try:
+                if response.status_code != 200:
+                    raise ProviderUpstreamError(f"Microsoft Graph token refresh returned HTTP {response.status_code}")
+                token_data = response.json()
+            finally:
+                response.close()
+        finally:
+            session.close()
+        access_token = str(token_data.get("access_token") or "")
+        if not access_token:
+            raise ProviderUpstreamError("Microsoft Graph token refresh omitted an access token")
+        captured_at = int(time.time())
+        expires_in = int(token_data.get("expires_in") or 0)
+        graph_data = load_m365_graph_data()
+        graph_data.update({
+            "access_token": access_token,
+            "captured_at": captured_at,
+            "expires_in": expires_in,
+            "expires_at": captured_at + expires_in,
+        })
+        refreshed_oauth = dict(oauth)
+        refreshed_form = dict(form)
+        if token_data.get("refresh_token"):
+            refreshed_form["refresh_token"] = str(token_data["refresh_token"])
+        refreshed_oauth["form"] = refreshed_form
+        refreshed_oauth["captured_at"] = captured_at
+        save_m365_graph_data(graph_data)
+        save_m365_graph_oauth_data(refreshed_oauth)
+        return graph_data
+
+    def _fetch_graph_profile_sync(self) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        graph_data = load_m365_graph_data()
+        expires_at = float(graph_data.get("expires_at") or 0)
+        if (not graph_data.get("access_token") or (expires_at and expires_at <= time.time() + 60)) and self.graph_refresh_configured:
+            try:
+                graph_data = self._refresh_graph_access_token_sync()
+            except ProviderUpstreamError as exc:
+                return {}, {"state": "error", "source": "Microsoft Graph", "message": str(exc)}, [{"source": "Microsoft Graph", "state": "error", "required": False}]
+
+        access_token = str(graph_data.get("access_token") or "")
+        if not access_token:
+            return {}, {"state": "not_connected", "source": "Microsoft Graph", "message": "Connect a read-only Microsoft Graph profile token to show account details."}, [{"source": "Microsoft Graph", "state": "not_connected", "required": False}]
+
+        session = Session(impersonate="chrome")
+        try:
+            response = session.get(
+                GRAPH_ME_URL,
+                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json", "User-Agent": USER_AGENT},
+                timeout=30,
+            )
+            try:
+                status = response.status_code
+                payload = response.json() if status == 200 else {}
+            finally:
+                response.close()
+        finally:
+            session.close()
+
+        if status != 200:
+            state = "expired" if status in {401, 403} else "error"
+            message = "Microsoft Graph profile token needs reconnection." if state == "expired" else f"Microsoft Graph returned HTTP {status}"
+            return {}, {"state": state, "source": "Microsoft Graph", "status": status, "message": message}, [{"source": "Microsoft Graph", "state": state, "status": status, "required": False}]
+
+        profile = {
+            "id": payload.get("id"),
+            "name": payload.get("displayName"),
+            "email": payload.get("mail") or payload.get("userPrincipalName"),
+            "identity_level": "identified",
+        }
+        account = {
+            "user_principal_name": payload.get("userPrincipalName"),
+            "job_title": payload.get("jobTitle"),
+            "office_location": payload.get("officeLocation"),
+            "preferred_language": payload.get("preferredLanguage"),
+            "usage_location": payload.get("usageLocation"),
+        }
+        return {"profile": profile, "account": account}, {"state": "available", "source": "Microsoft Graph", "status": status}, [{"source": "Microsoft Graph", "state": "available", "status": status, "required": False}]
+
+    async def fetch_account_snapshot(self, *, refresh: bool = False) -> dict[str, Any]:
+        if self.is_configured() and not self.initialized:
+            try:
+                await self.initialize()
+            except ProviderUpstreamError as exc:
+                runtime = self.runtime_status()
+                base = await super().fetch_account_snapshot(refresh=refresh)
+                base["connection"]["state"] = "error"
+                base["diagnostics"] = [{"source": "Microsoft 365 Copilot", "state": "error", "message": str(exc), "required": True}]
+                base["runtime"] = self._safe_runtime_status(runtime)
+                return base
+        graph, graph_connection, diagnostics = await asyncio.to_thread(self._fetch_graph_profile_sync)
+        runtime = self.runtime_status()
+        connection_state = "active" if runtime.get("initialized") and runtime.get("generation_ready") else "configured" if runtime.get("configured") else "not_configured"
+        return {
+            "provider": self.descriptor(),
+            "connection": {
+                "state": connection_state,
+                "configured": bool(runtime.get("configured")),
+                "initialized": bool(runtime.get("initialized")),
+                "generation_ready": bool(runtime.get("generation_ready")),
+                "auth_mode": runtime.get("auth_mode"),
+                "profile_connection": graph_connection,
+            },
+            "profile": graph.get("profile") or {},
+            "account": graph.get("account") or {},
+            "entitlement": {},
+            "privacy": {},
+            "models": {
+                "count": runtime.get("model_count", 0),
+                "default_model": runtime.get("default_model"),
+                "catalog_source": runtime.get("model_catalog_source"),
+            },
+            "credentials": {
+                "cookie_session": "active" if runtime.get("web_session_valid") else "unavailable",
+                "generation_bearer": "active" if runtime.get("generation_ready") else "required",
+                "generation_refresh": "configured" if self.refresh_configured else "manual",
+                "graph_profile": graph_connection.get("state"),
+                "graph_refresh": "configured" if self.graph_refresh_configured else "manual",
+            },
+            "runtime": self._safe_runtime_status(runtime),
+            "diagnostics": diagnostics,
+            "warnings": ([graph_connection["message"]] if graph_connection.get("message") else []),
         }
 
     async def close(self) -> None:

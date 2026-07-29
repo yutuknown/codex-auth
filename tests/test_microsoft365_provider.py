@@ -71,6 +71,7 @@ class FakeRefreshSession:
     def __init__(self):
         self.request = None
         self.response = FakeTokenResponse()
+        self.closed = False
 
     def post(self, endpoint, params, data, headers, timeout):
         self.request = {
@@ -81,6 +82,36 @@ class FakeRefreshSession:
             "timeout": timeout,
         }
         return self.response
+
+    def close(self):
+        self.closed = True
+
+
+class FakeGraphResponse:
+    def __init__(self, status_code, payload=None):
+        self.status_code = status_code
+        self.payload = payload or {}
+        self.closed = False
+
+    def json(self):
+        return self.payload
+
+    def close(self):
+        self.closed = True
+
+
+class FakeGraphSession:
+    def __init__(self, response):
+        self.response = response
+        self.headers = None
+        self.closed = False
+
+    def get(self, endpoint, headers, timeout):
+        self.headers = headers
+        return self.response
+
+    def close(self):
+        self.closed = True
 
 
 def test_microsoft_generation_uses_signalr_and_extracts_final_bot_text():
@@ -268,3 +299,73 @@ def test_microsoft_oauth_refresh_rotates_and_persists_tokens(monkeypatch):
     assert saved["oauth"]["form"]["refresh_token"] == "rotated-refresh"
     assert saved["auth"]["access_token"] == "rotated-access"
     assert session.response.closed is True
+
+
+def test_microsoft_graph_profile_is_optional_and_normalized(monkeypatch):
+    response = FakeGraphResponse(
+        200,
+        {
+            "id": "graph-user",
+            "displayName": "Graph User",
+            "userPrincipalName": "graph@example.com",
+            "officeLocation": "Singapore",
+        },
+    )
+    session = FakeGraphSession(response)
+    monkeypatch.setattr("codex_auth.providers.microsoft365.Session", lambda **_: session)
+    monkeypatch.setattr(
+        "codex_auth.providers.microsoft365.load_m365_graph_data",
+        lambda: {"access_token": "graph-token", "expires_at": 9_999_999_999},
+    )
+    monkeypatch.setattr("codex_auth.providers.microsoft365.load_m365_graph_oauth_data", lambda: {})
+    provider = Microsoft365CopilotProvider()
+
+    graph, connection, diagnostics = provider._fetch_graph_profile_sync()
+
+    assert graph["profile"]["name"] == "Graph User"
+    assert graph["account"]["office_location"] == "Singapore"
+    assert connection["state"] == "available"
+    assert diagnostics[0]["status"] == 200
+    assert session.headers["Authorization"] == "Bearer graph-token"
+
+
+def test_microsoft_graph_expiry_does_not_break_copilot_generation(monkeypatch):
+    response = FakeGraphResponse(401)
+    monkeypatch.setattr(
+        "codex_auth.providers.microsoft365.Session",
+        lambda **_: FakeGraphSession(response),
+    )
+    monkeypatch.setattr(
+        "codex_auth.providers.microsoft365.load_m365_graph_data",
+        lambda: {"access_token": "expired-graph-token", "expires_at": 9_999_999_999},
+    )
+    monkeypatch.setattr("codex_auth.providers.microsoft365.load_m365_graph_oauth_data", lambda: {})
+    provider = Microsoft365CopilotProvider()
+
+    graph, connection, diagnostics = provider._fetch_graph_profile_sync()
+
+    assert graph == {}
+    assert connection["state"] == "expired"
+    assert diagnostics[0]["required"] is False
+
+
+def test_microsoft_graph_refresh_rotates_optional_profile_token(monkeypatch):
+    oauth = {
+        "token_endpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+        "form": {"grant_type": "refresh_token", "refresh_token": "old-graph-refresh"},
+    }
+    saved = {}
+    session = FakeRefreshSession()
+    monkeypatch.setattr("codex_auth.providers.microsoft365.Session", lambda **_: session)
+    monkeypatch.setattr("codex_auth.providers.microsoft365.load_m365_graph_oauth_data", lambda: oauth)
+    monkeypatch.setattr("codex_auth.providers.microsoft365.load_m365_graph_data", lambda: {})
+    monkeypatch.setattr("codex_auth.providers.microsoft365.save_m365_graph_data", lambda value: saved.setdefault("graph", value))
+    monkeypatch.setattr("codex_auth.providers.microsoft365.save_m365_graph_oauth_data", lambda value: saved.setdefault("oauth", value))
+    provider = Microsoft365CopilotProvider()
+
+    graph_data = provider._refresh_graph_access_token_sync()
+
+    assert graph_data["access_token"] == "rotated-access"
+    assert graph_data["expires_at"] > 0
+    assert saved["oauth"]["form"]["refresh_token"] == "rotated-refresh"
+    assert session.closed is True

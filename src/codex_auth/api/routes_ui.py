@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import secrets
 from pathlib import Path
@@ -12,6 +14,8 @@ from ..config import (
     get_auth_file,
     get_cookie_file,
     save_cookie_text,
+    save_m365_graph_data,
+    save_m365_graph_oauth_data,
     save_provider_cookie_text,
 )
 
@@ -23,6 +27,11 @@ class CookieUpdateRequest(BaseModel):
     cookies: str = Field(min_length=1, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
     source_name: str | None = Field(default=None, max_length=128)
     provider: str = Field(default="openai-web", max_length=64)
+
+
+class GraphCredentialUpdateRequest(BaseModel):
+    graph_json: str = Field(min_length=2, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
+    oauth_json: str | None = Field(default=None, max_length=MAX_COOKIE_UPDATE_CHARACTERS)
 
 
 LOGIN_PAGE = """<!doctype html>
@@ -221,6 +230,60 @@ async def get_providers():
     }
 
 
+async def _provider_account_snapshot(provider_id: str, *, refresh: bool = False) -> dict:
+    from ..providers.errors import ProviderError
+    from ..providers.runtime import registry
+
+    provider = registry.get(provider_id)
+    try:
+        return await provider.fetch_account_snapshot(refresh=refresh)
+    except ProviderError as exc:
+        # Call the base implementation directly so a repeated upstream error
+        # cannot turn a partial provider failure into a failed aggregate page.
+        from ..providers.base import BaseProvider
+
+        fallback = await BaseProvider.fetch_account_snapshot(provider, refresh=False)
+        fallback["connection"]["state"] = "error"
+        fallback.setdefault("diagnostics", []).append(
+            {
+                "source": provider.display_name,
+                "state": "error",
+                "message": str(exc),
+                "required": True,
+            }
+        )
+        return fallback
+
+
+@router.get("/api/accounts")
+async def get_provider_accounts(refresh: bool = False):
+    """Return independent account snapshots without allowing one provider to fail the page."""
+    from ..providers.runtime import registry
+
+    snapshots = await asyncio.gather(
+        *(_provider_account_snapshot(provider_id, refresh=refresh) for provider_id in registry.ids())
+    )
+    return {
+        "default_provider": registry.default_provider_id,
+        "providers": snapshots,
+    }
+
+
+@router.get("/api/providers/{provider_id}/account")
+async def get_provider_account(provider_id: str, refresh: bool = False):
+    from ..providers.errors import ProviderNotFoundError
+    from ..providers.runtime import registry
+
+    try:
+        registry.get(provider_id)
+    except ProviderNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": str(exc), "type": "not_found"},
+        ) from exc
+    return await _provider_account_snapshot(provider_id, refresh=refresh)
+
+
 @router.get("/api/account")
 async def get_account():
     from ..providers.openai.provider import ChatGPTSessionError, provider
@@ -319,6 +382,69 @@ async def update_session_cookies(payload: CookieUpdateRequest):
             "file_saved": file_saved,
             "restart_safe": file_saved and not hosted_on_render,
             "warning": persistence_warning,
+        },
+    }
+
+
+@router.post("/api/providers/m365-copilot/graph-credentials")
+async def update_m365_graph_credentials(payload: GraphCredentialUpdateRequest):
+    """Activate optional, read-only Microsoft Graph profile credentials.
+
+    The endpoint deliberately accepts JSON text rather than returning any
+    credential fields. Render users still need to persist the matching secrets
+    for a restart-safe configuration.
+    """
+    try:
+        graph_data = json.loads(payload.graph_json)
+        oauth_data = json.loads(payload.oauth_json) if payload.oauth_json else None
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Graph credentials must be valid JSON objects", "type": "invalid_graph_credentials"},
+        ) from exc
+    if not isinstance(graph_data, dict) or (oauth_data is not None and not isinstance(oauth_data, dict)):
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Graph credentials must be JSON objects", "type": "invalid_graph_credentials"},
+        )
+    if not graph_data.get("access_token") and not (oauth_data or {}).get("form", {}).get("refresh_token"):
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Provide a Graph access token or a refresh-token bundle", "type": "invalid_graph_credentials"},
+        )
+    try:
+        save_m365_graph_data(graph_data)
+        if oauth_data is not None:
+            save_m365_graph_oauth_data(oauth_data)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": "The Graph credential file could not be saved", "type": "persistence_error"},
+        ) from exc
+    os.environ["CODEX_AUTH_M365_GRAPH_JSON"] = payload.graph_json
+    if payload.oauth_json:
+        os.environ["CODEX_AUTH_M365_GRAPH_OAUTH_JSON"] = payload.oauth_json
+
+    from ..providers.runtime import registry
+
+    snapshot = await registry.get("m365-copilot").fetch_account_snapshot(refresh=True)
+    profile_connection = (snapshot.get("connection") or {}).get("profile_connection") or {}
+    hosted_on_render = bool(os.environ.get("RENDER"))
+    return {
+        "status": "activated",
+        "provider": "m365-copilot",
+        "profile_connection": {
+            "state": profile_connection.get("state"),
+            "source": profile_connection.get("source"),
+            "status": profile_connection.get("status"),
+        },
+        "persistence": {
+            "runtime_active": True,
+            "warning": (
+                "Active now. Also persist CODEX_AUTH_M365_GRAPH_JSON and CODEX_AUTH_M365_GRAPH_OAUTH_JSON on Render."
+                if hosted_on_render
+                else None
+            ),
         },
     }
 

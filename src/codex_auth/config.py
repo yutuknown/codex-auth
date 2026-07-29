@@ -72,6 +72,13 @@ def get_m365_graph_file() -> Path:
     return Path(__file__).resolve().parent.parent.parent / ".codex" / "m365-graph.json"
 
 
+def get_m365_graph_oauth_file() -> Path:
+    configured_path = os.environ.get("CODEX_AUTH_M365_GRAPH_OAUTH_FILE")
+    if configured_path:
+        return Path(configured_path).expanduser()
+    return Path(__file__).resolve().parent.parent.parent / ".codex" / "m365-graph-oauth.json"
+
+
 def load_m365_auth_data() -> Dict[str, Any]:
     inline_auth = os.environ.get("CODEX_AUTH_M365_AUTH_JSON")
     if inline_auth:
@@ -115,6 +122,21 @@ def load_m365_graph_data() -> Dict[str, Any]:
 
 def save_m365_graph_data(data: Dict[str, Any]) -> Path:
     return _atomic_save_json(get_m365_graph_file(), data)
+
+
+def load_m365_graph_oauth_data() -> Dict[str, Any]:
+    inline_oauth = os.environ.get("CODEX_AUTH_M365_GRAPH_OAUTH_JSON")
+    if inline_oauth:
+        return json.loads(inline_oauth)
+    oauth_file = get_m365_graph_oauth_file()
+    if not oauth_file.exists():
+        return {}
+    with oauth_file.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save_m365_graph_oauth_data(data: Dict[str, Any]) -> Path:
+    return _atomic_save_json(get_m365_graph_oauth_file(), data)
 
 
 def get_cookie_file() -> Path:

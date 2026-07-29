@@ -95,6 +95,14 @@ can provide the same values through
 `CODEX_AUTH_M365_COOKIES`, `CODEX_AUTH_M365_AUTH_JSON`, and
 `CODEX_AUTH_M365_OAUTH_JSON`.
 
+The Account dashboard is provider-first: it exposes separate connection,
+model, credential-health, and account views for each registered provider.
+Microsoft 365 profile data is optional and read-only. Configure
+`CODEX_AUTH_M365_GRAPH_JSON` for a Graph `User.Read` access token and, when a
+durable refresh flow is available, `CODEX_AUTH_M365_GRAPH_OAUTH_JSON`. A
+missing or expired Graph profile token never prevents Microsoft 365 chat
+generation.
+
 The provider discovers the current account-visible Microsoft model selector
 from authenticated `GET https://m365.cloud.microsoft/chat` hydration data. The
 result is cached for 15 minutes and safely falls back to the last known catalog

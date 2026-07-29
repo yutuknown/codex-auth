@@ -42,6 +42,47 @@ class BaseProvider(ABC):
             "capabilities": self.capabilities.to_dict(),
         }
 
+    @staticmethod
+    def _safe_runtime_status(runtime: dict[str, Any]) -> dict[str, Any]:
+        """Keep account endpoints useful without leaking credentials or cookie values."""
+        sensitive = ("token", "cookie", "secret", "authorization", "password", "refresh")
+        return {
+            key: value
+            for key, value in runtime.items()
+            if not any(marker in key.lower() for marker in sensitive)
+        }
+
+    async def fetch_account_snapshot(self, *, refresh: bool = False) -> dict[str, Any]:
+        """Return a provider-neutral account view.
+
+        Providers with richer upstream account APIs override this method.  The
+        default remains intentionally useful for future providers: connection
+        and model runtime are visible without inventing profile fields.
+        """
+        runtime = self.runtime_status()
+        return {
+            "provider": self.descriptor(),
+            "connection": {
+                "state": "active" if runtime.get("initialized") else "configured" if runtime.get("configured") else "not_configured",
+                "configured": bool(runtime.get("configured")),
+                "initialized": bool(runtime.get("initialized")),
+                "generation_ready": runtime.get("generation_ready"),
+                "auth_mode": runtime.get("auth_mode"),
+            },
+            "profile": {},
+            "account": {},
+            "entitlement": {},
+            "privacy": {},
+            "models": {
+                "count": runtime.get("model_count", 0),
+                "default_model": runtime.get("default_model"),
+                "catalog_source": runtime.get("model_catalog_source"),
+            },
+            "credentials": {},
+            "runtime": self._safe_runtime_status(runtime),
+            "diagnostics": [],
+        }
+
     @abstractmethod
     async def initialize(self) -> None:
         """

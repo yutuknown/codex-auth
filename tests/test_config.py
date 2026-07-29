@@ -6,15 +6,18 @@ from codex_auth.config import (
     get_cookie_file,
     get_m365_auth_file,
     get_m365_graph_file,
+    get_m365_graph_oauth_file,
     get_provider_cookie_file,
     load_auth_data,
     load_cookie_text,
     load_m365_auth_data,
     load_m365_graph_data,
+    load_m365_graph_oauth_data,
     load_provider_cookie_text,
     provider_cookies_are_configured,
     save_cookie_text,
     save_m365_graph_data,
+    save_m365_graph_oauth_data,
     save_provider_cookie_text,
 )
 
@@ -89,3 +92,16 @@ def test_m365_graph_credentials_use_configured_file(monkeypatch, tmp_path):
         "access_token": "graph-token",
         "expires_at": 12345,
     }
+
+
+def test_m365_graph_refresh_credentials_use_render_secret_or_configured_file(monkeypatch, tmp_path):
+    oauth_file = tmp_path / "m365-graph-oauth.json"
+    monkeypatch.setenv("CODEX_AUTH_M365_GRAPH_OAUTH_FILE", str(oauth_file))
+
+    saved = save_m365_graph_oauth_data({"form": {"refresh_token": "secret"}})
+
+    assert saved == oauth_file
+    assert get_m365_graph_oauth_file() == oauth_file
+    assert load_m365_graph_oauth_data() == {"form": {"refresh_token": "secret"}}
+    monkeypatch.setenv("CODEX_AUTH_M365_GRAPH_OAUTH_JSON", json.dumps({"access_token": "inline"}))
+    assert load_m365_graph_oauth_data() == {"access_token": "inline"}

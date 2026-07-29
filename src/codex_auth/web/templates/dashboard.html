@@ -605,12 +605,36 @@
         .cookie-update-result.success { display: block; color: var(--log-success); border-color: color-mix(in srgb, var(--log-success) 28%, transparent); }
         .cookie-update-result.error { display: block; color: var(--log-error); border-color: color-mix(in srgb, var(--log-error) 28%, transparent); }
         .cookie-security-note { margin: 14px 0 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.55; }
+        .provider-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 18px; }
+        .provider-account-card { min-height: 165px; padding: 17px; border: 1px solid var(--border-subtle); border-radius: 10px; color: inherit; background: var(--bg-base); cursor: pointer; text-align: left; transition: border-color .18s ease, transform .18s ease, background .18s ease; }
+        .provider-account-card:hover { border-color: var(--border-strong); background: var(--bg-surface); transform: translateY(-1px); }
+        .provider-account-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent); }
+        .provider-account-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .provider-account-card h3 { margin: 0; font-size: 15px; }
+        .provider-account-card p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; }
+        .provider-card-metrics { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+        .provider-card-metric { padding: 5px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-secondary); font: 11px var(--font-mono); }
+        .provider-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+        .provider-detail-section { min-height: 130px; padding: 15px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-base); }
+        .provider-detail-section h4 { margin: 0 0 12px; color: var(--text-secondary); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+        .provider-kv { display: grid; gap: 9px; }
+        .provider-kv-row { display: grid; grid-template-columns: minmax(90px, .75fr) minmax(0, 1.25fr); gap: 10px; font-size: 12px; }
+        .provider-kv-row span:first-child { color: var(--text-secondary); }
+        .provider-kv-row span:last-child { color: var(--text-primary); overflow-wrap: anywhere; }
+        .provider-empty { color: var(--text-tertiary); font-size: 12px; line-height: 1.5; }
+        .provider-diagnostic-list { display: flex; flex-wrap: wrap; gap: 7px; }
+        .provider-diagnostic { padding: 5px 8px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-secondary); font: 11px var(--font-mono); }
+        .provider-diagnostic.available { color: var(--log-success); }
+        .provider-diagnostic.expired, .provider-diagnostic.not_connected { color: var(--log-warn); }
+        .provider-diagnostic.error { color: var(--log-error); }
+        .legacy-account-panel { display: none; }
 
         @media (max-width: 720px) {
             .detail-grid { grid-template-columns: 1fr; }
             .panel-metric-grid { grid-template-columns: repeat(2, 1fr); }
             .slide-panel { width: 100vw; right: -100vw; }
             .cookie-update-layout { grid-template-columns: 1fr; }
+            .provider-detail-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -788,12 +812,36 @@
             <!-- Account View -->
             <div id="account-view" class="view">
                 <div class="header">
-                    <h1>Account & Session</h1>
-                    <p>Live profile, entitlement, privacy, and runtime state from authenticated ChatGPT endpoints.</p>
+                    <h1>Providers & Accounts</h1>
+                    <p>Independent account, session, model, and credential health for every configured provider.</p>
                 </div>
-                
+
                 <div class="bento-grid">
                     <div class="bento-card col-12">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;">
+                            <div>
+                                <h3 style="margin:0 0 6px;">Provider accounts</h3>
+                                <p style="margin:0;color:var(--text-secondary);font-size:13px;line-height:1.5;">Select a provider to inspect its own session and account sources. Account fields are shown only when that provider reports them.</p>
+                            </div>
+                            <span class="status-badge" id="provider-account-default">Default: loading</span>
+                        </div>
+                        <div id="provider-account-cards" class="provider-card-grid" aria-live="polite"></div>
+                    </div>
+
+                    <div class="bento-card col-12">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;">
+                            <div>
+                                <h3 style="margin:0 0 6px;" id="selected-provider-title">Select a provider</h3>
+                                <p style="margin:0;color:var(--text-secondary);font-size:13px;line-height:1.5;" id="selected-provider-subtitle">Loading provider account details…</p>
+                            </div>
+                            <span class="status-badge" id="selected-provider-status">Loading</span>
+                        </div>
+                        <div id="selected-provider-detail" class="provider-detail-grid"></div>
+                    </div>
+                </div>
+
+                <div class="bento-grid">
+                    <div class="bento-card col-12 legacy-account-panel">
                         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;">
                             <div>
                                 <h3 style="margin:0 0 6px;">Provider Registry</h3>
@@ -817,7 +865,7 @@
                         </table>
                     </div>
 
-                    <div class="bento-card col-12">
+                    <div class="bento-card col-12 legacy-account-panel">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
                             <div>
                                 <h3 style="margin: 0 0 6px 0;" id="account-name">Authenticated Account</h3>
@@ -865,7 +913,7 @@
                     <div class="bento-card col-12">
                         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:18px; flex-wrap:wrap;">
                             <div>
-                                <h3 style="margin:0 0 6px;">Update Session Cookies</h3>
+                                <h3 style="margin:0 0 6px;">Selected provider session controls</h3>
                                 <p style="margin:0;color:var(--text-secondary);font-size:13px;line-height:1.5;">
                                     Paste a Netscape HTTP Cookie File export or choose a local file. Microsoft 365 activation also refreshes its account-visible model catalog.
                                 </p>
@@ -901,9 +949,25 @@
                             Cookie values are never returned by the API or written to request logs. Activation is immediate.
                             On Render, persist the matching <span class="font-mono">CODEX_AUTH_COOKIES</span> or <span class="font-mono">CODEX_AUTH_M365_COOKIES</span> secret if the replacement must survive a restart.
                         </p>
+                        <details style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-subtle);">
+                            <summary style="cursor:pointer;font-weight:700;font-size:13px;">Microsoft Graph profile connection (optional)</summary>
+                            <p style="margin:10px 0 14px;color:var(--text-secondary);font-size:12px;line-height:1.5;">Adds read-only profile data to the Microsoft 365 provider card. Paste a Graph credential JSON object and, optionally, its refresh-token JSON bundle. These values are never rendered after submission.</p>
+                            <div class="cookie-update-layout" style="margin-top:0;">
+                                <div>
+                                    <label for="graph-credential-json" class="account-health-title" style="display:block;margin-bottom:8px;">Graph credential JSON</label>
+                                    <textarea id="graph-credential-json" class="cookie-textarea" style="min-height:110px;" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder='{"access_token":"…","expires_at":0}'></textarea>
+                                </div>
+                                <div>
+                                    <label for="graph-oauth-json" class="account-health-title" style="display:block;margin-bottom:8px;">Optional refresh JSON</label>
+                                    <textarea id="graph-oauth-json" class="cookie-textarea" style="min-height:110px;" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder='{"token_endpoint":"…","form":{"refresh_token":"…"}}'></textarea>
+                                    <button id="graph-submit-button" class="cookie-submit-button" type="button" style="margin-top:12px;" onclick="submitGraphCredentials()">Validate Graph profile</button>
+                                </div>
+                            </div>
+                            <div id="graph-update-result" class="cookie-update-result" role="status" aria-live="polite"></div>
+                        </details>
                     </div>
                     
-                    <div class="bento-card col-4">
+                    <div class="bento-card col-4 legacy-account-panel">
                         <h3>Credential Lifetime</h3>
                         <div class="detail-item" style="margin-top:20px;">
                             <label>Access token</label>
@@ -915,7 +979,7 @@
                         <div class="warning-note" id="expiry-warning">Checking credential lifetime…</div>
                     </div>
 
-                    <div class="bento-card col-4">
+                    <div class="bento-card col-4 legacy-account-panel">
                         <h3>HTTP Runtime</h3>
                         <div class="detail-grid">
                             <div class="detail-item"><label>Transport</label><div class="font-mono" id="runtime-transport">-</div></div>
@@ -927,7 +991,7 @@
                         </div>
                     </div>
 
-                    <div class="bento-card col-4">
+                    <div class="bento-card col-4 legacy-account-panel">
                         <h3>Privacy Settings</h3>
                         <div class="detail-grid">
                             <div class="detail-item"><label>Chat Training</label><div id="privacy-training">-</div></div>
@@ -1521,6 +1585,49 @@
             result.textContent = message;
         }
 
+        function showGraphUpdateResult(message, type) {
+            const result = document.getElementById('graph-update-result');
+            result.className = `cookie-update-result ${type}`;
+            result.textContent = message;
+        }
+
+        async function submitGraphCredentials() {
+            const graphInput = document.getElementById('graph-credential-json');
+            const oauthInput = document.getElementById('graph-oauth-json');
+            const button = document.getElementById('graph-submit-button');
+            if (!graphInput.value.trim()) {
+                showGraphUpdateResult('Paste the Graph credential JSON first.', 'error');
+                return;
+            }
+            button.disabled = true;
+            button.textContent = 'Validating Graph profile…';
+            try {
+                const response = await fetch('/api/providers/m365-copilot/graph-credentials', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({graph_json: graphInput.value, oauth_json: oauthInput.value || null}),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    const detail = data.detail || {};
+                    throw new Error(detail.message || data.message || `Graph activation returned HTTP ${response.status}`);
+                }
+                graphInput.value = '';
+                oauthInput.value = '';
+                const profile = data.profile_connection || {};
+                showGraphUpdateResult(
+                    `Microsoft Graph profile connection: ${profile.state || 'updated'}.${data.persistence?.warning ? ` ${data.persistence.warning}` : ''}`,
+                    profile.state === 'available' ? 'success' : 'error'
+                );
+                await fetchProviderAccounts(true);
+            } catch (error) {
+                showGraphUpdateResult(`Graph profile update failed: ${error.message}`, 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Validate Graph profile';
+            }
+        }
+
         async function handleCookieFile(event) {
             const file = event.target.files && event.target.files[0];
             pendingCookieFileText = null;
@@ -1606,7 +1713,7 @@
                 document.getElementById('cookie-file-name').textContent = 'No file selected';
                 pendingCookieFileText = null;
                 pendingCookieFileName = null;
-                await Promise.all([fetchAccount(), fetchStatus(), fetchModels()]);
+                await Promise.all([fetchProviderAccounts(true), fetchModels()]);
             } catch (error) {
                 showCookieUpdateResult(`Cookie update failed: ${error.message}`, 'error');
             } finally {
@@ -1638,6 +1745,122 @@
             return Object.entries(capabilities || {})
                 .filter(([, enabled]) => enabled)
                 .map(([name]) => labels[name] || name);
+        }
+
+        let providerAccountSnapshots = new Map();
+        let selectedProviderAccountId = null;
+
+        function providerStateLabel(state) {
+            return String(state || 'unknown').replace(/_/g, ' ');
+        }
+
+        function providerStatusClass(state) {
+            if (state === 'active' || state === 'available') return 'online';
+            if (state === 'error') return 'error';
+            return 'warning';
+        }
+
+        function providerRows(values, labels) {
+            const rows = Object.entries(values || {})
+                .filter(([, value]) => value !== null && value !== undefined && value !== '')
+                .map(([key, value]) => {
+                    const label = labels?.[key] || key.replace(/_/g, ' ');
+                    const text = typeof value === 'boolean' ? (value ? 'Enabled' : 'Disabled') : String(value);
+                    return `<div class="provider-kv-row"><span>${escapeHtml(label)}</span><span>${escapeHtml(text)}</span></div>`;
+                });
+            return rows.length ? `<div class="provider-kv">${rows.join('')}</div>` : '<div class="provider-empty">Not reported by this provider.</div>';
+        }
+
+        function providerSection(title, content) {
+            return `<section class="provider-detail-section"><h4>${escapeHtml(title)}</h4>${content}</section>`;
+        }
+
+        function selectProviderAccount(providerId) {
+            if (!providerAccountSnapshots.has(providerId)) return;
+            selectedProviderAccountId = providerId;
+            const cookieProvider = document.getElementById('cookie-provider');
+            if (cookieProvider && Array.from(cookieProvider.options).some(option => option.value === providerId)) {
+                cookieProvider.value = providerId;
+            }
+            renderProviderAccounts();
+        }
+
+        function renderProviderAccounts() {
+            const cards = document.getElementById('provider-account-cards');
+            const detail = document.getElementById('selected-provider-detail');
+            const selected = providerAccountSnapshots.get(selectedProviderAccountId);
+            cards.replaceChildren();
+            providerAccountSnapshots.forEach((snapshot, providerId) => {
+                const descriptor = snapshot.provider || {};
+                const connection = snapshot.connection || {};
+                const models = snapshot.models || {};
+                const card = document.createElement('button');
+                card.type = 'button';
+                card.className = `provider-account-card ${providerId === selectedProviderAccountId ? 'selected' : ''}`;
+                card.setAttribute('aria-pressed', String(providerId === selectedProviderAccountId));
+                card.onclick = () => selectProviderAccount(providerId);
+                const capabilities = capabilityNames(descriptor.capabilities || {}).slice(0, 3);
+                card.innerHTML = `
+                    <div class="provider-account-card-header">
+                        <div><h3>${escapeHtml(descriptor.display_name || providerId)}</h3><p class="font-mono">${escapeHtml(providerId)}</p></div>
+                        <span class="status-badge ${providerStatusClass(connection.state)}">${escapeHtml(providerStateLabel(connection.state))}</span>
+                    </div>
+                    <div class="provider-card-metrics">
+                        <span class="provider-card-metric">${models.count || 0} models</span>
+                        <span class="provider-card-metric">${connection.generation_ready ? 'generation ready' : 'session only'}</span>
+                        ${capabilities.map(name => `<span class="provider-card-metric">${escapeHtml(name)}</span>`).join('')}
+                    </div>`;
+                cards.appendChild(card);
+            });
+
+            if (!selected) {
+                detail.innerHTML = providerSection('Account details', '<div class="provider-empty">No provider account is available.</div>');
+                return;
+            }
+            const descriptor = selected.provider || {};
+            const connection = selected.connection || {};
+            const profileConnection = connection.profile_connection || {};
+            const diagnostics = selected.diagnostics || [];
+            const warnings = selected.warnings || [];
+            document.getElementById('selected-provider-title').textContent = descriptor.display_name || selectedProviderAccountId;
+            document.getElementById('selected-provider-subtitle').textContent = descriptor.auth_kind || 'Provider account snapshot';
+            const status = document.getElementById('selected-provider-status');
+            status.className = `status-badge ${providerStatusClass(connection.state)}`;
+            status.textContent = providerStateLabel(connection.state);
+            detail.innerHTML = [
+                providerSection('Connection', providerRows({
+                    session: connection.initialized ? 'Connected' : connection.configured ? 'Configured' : 'Not configured',
+                    generation: connection.generation_ready ? 'Ready' : 'Unavailable',
+                    authentication: connection.auth_mode || 'Not reported',
+                    profile_source: profileConnection.state ? `${profileConnection.source || 'Profile'} · ${providerStateLabel(profileConnection.state)}` : null,
+                })),
+                providerSection('Account', providerRows(selected.profile, {name: 'Name', email: 'Email', id: 'User ID', identity_level: 'Identity'} ) + providerRows(selected.account, {user_principal_name: 'Principal name', job_title: 'Job title', office_location: 'Office', usage_location: 'Usage location'})),
+                providerSection('Subscription & privacy', providerRows({...selected.entitlement, ...selected.privacy}, {subscription_plan: 'Plan', has_active_subscription: 'Subscription active', training_allowed: 'Training', codex_training_allowed: 'Codex training'})),
+                providerSection('Models & runtime', providerRows({
+                    live_models: selected.models?.count,
+                    default_model: selected.models?.default_model,
+                    catalog_source: selected.models?.catalog_source,
+                    transport: selected.runtime?.transport,
+                    uptime: selected.runtime?.uptime_seconds !== undefined ? formatDuration(selected.runtime.uptime_seconds) : null,
+                }, {live_models: 'Live models', default_model: 'Default model', catalog_source: 'Catalog source'})),
+                providerSection('Credential health', providerRows(selected.credentials, {cookie_session: 'Cookie session', generation_bearer: 'Generation bearer', generation_refresh: 'Bearer renewal', graph_profile: 'Graph profile', graph_refresh: 'Graph renewal'})),
+                providerSection('Diagnostics', diagnostics.length
+                    ? `<div class="provider-diagnostic-list">${diagnostics.map(item => `<span class="provider-diagnostic ${escapeHtml(item.state || '')}" title="${escapeHtml(item.message || '')}">${escapeHtml(item.source || 'Source')} · ${escapeHtml(providerStateLabel(item.state))}${item.status ? ` · HTTP ${escapeHtml(item.status)}` : ''}</span>`).join('')}</div>${warnings.length ? `<div class="account-health-note">${escapeHtml(warnings.join(' · '))}</div>` : ''}`
+                    : '<div class="provider-empty">No provider diagnostics reported.</div>'),
+            ].join('');
+        }
+
+        async function fetchProviderAccounts(refresh = false) {
+            const query = refresh ? '?refresh=true' : '';
+            const res = await fetch(`/api/accounts${query}`);
+            if (!res.ok) throw new Error(`Provider accounts returned HTTP ${res.status}`);
+            const data = await res.json();
+            providerAccountSnapshots = new Map((data.providers || []).map(snapshot => [snapshot.provider?.id, snapshot]));
+            if (!selectedProviderAccountId || !providerAccountSnapshots.has(selectedProviderAccountId)) {
+                selectedProviderAccountId = data.default_provider || data.providers?.[0]?.provider?.id || null;
+            }
+            document.getElementById('provider-account-default').textContent = `Default: ${data.default_provider || 'none'}`;
+            renderProviderAccounts();
         }
 
         async function fetchProviders() {
@@ -1832,16 +2055,12 @@
         fetchLogs();
         fetchUsage();
         fetchModels();
-        fetchProviders();
-        fetchStatus();
-        fetchAccount();
+        fetchProviderAccounts().catch(() => {});
         
         setInterval(() => { if (!document.hidden) fetchLogs(); }, 1000);
         setInterval(() => { if (!document.hidden) fetchUsage(); }, 3000);
         setInterval(() => { if (!document.hidden) fetchModels(); }, 300000);
-        setInterval(() => { if (!document.hidden) fetchProviders(); }, 30000);
-        setInterval(() => { if (!document.hidden) fetchStatus(); }, 30000);
-        setInterval(() => { if (!document.hidden) fetchAccount(); }, 300000);
+        setInterval(() => { if (!document.hidden) fetchProviderAccounts(); }, 30000);
 
         function copyToClipboard(elementId, btnElement, stripDollar = false) {
             let text = document.getElementById(elementId).innerText;

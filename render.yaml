@@ -16,6 +16,10 @@ services:
         sync: false
       - key: CODEX_AUTH_M365_OAUTH_JSON
         sync: false
+      - key: CODEX_AUTH_M365_GRAPH_JSON
+        sync: false
+      - key: CODEX_AUTH_M365_GRAPH_OAUTH_JSON
+        sync: false
       - key: CODEX_AUTH_API_KEY
         generateValue: true
       - key: CODEX_AUTH_OPEN_DASHBOARD

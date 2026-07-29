@@ -159,6 +159,29 @@ runtime copy. On Render, dashboard imports and rotated credentials are
 temporary: update both `CODEX_AUTH_M365_AUTH_JSON` and
 `CODEX_AUTH_M365_OAUTH_JSON` secrets to survive a restart or deploy.
 
+### Local M365 bearer-only beta
+
+`beta/` contains a deliberately isolated, cookie-free M365 SignalR experiment.
+It is not part of the production registry or Render deployment. Create fresh
+local `beta/ms365-auth.json` and `beta/ms365-route.json` files from the
+redacted examples, including the route identity and OAuth request metadata
+captured from one authenticated M365 chat connection. Check only safe readiness
+state with:
+
+```bash
+python -m codex_auth.beta.m365_bearer status
+```
+
+The live proof is intentionally opt-in and sends one harmless text prompt:
+
+```powershell
+$env:CODEX_AUTH_M365_BETA_CONFIRM = "1"
+python -m codex_auth.beta.m365_bearer probe
+```
+
+The beta never loads cookies and must not be treated as production-ready unless
+the probe completes successfully with zero cookies.
+
 ## ☁️ Deploy on Render
 
 The included `Dockerfile` has no browser dependencies, and `render.yaml` uses

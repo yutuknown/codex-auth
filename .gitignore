@@ -39,3 +39,8 @@ sandbox/
 models.json
 models_dump.json
 init.json
+
+# Local-only bearer transport experiments. Keep credential records out of Git.
+beta/*
+!beta/.gitignore
+!beta/*.example.json

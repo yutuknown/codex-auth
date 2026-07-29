@@ -1,0 +1,7 @@
+{
+  "token_type": "Bearer",
+  "scope": "https://substrate.office.com/sydney/v2/.default",
+  "expires_in": 28800,
+  "access_token": "REDACTED",
+  "refresh_token": "REDACTED"
+}

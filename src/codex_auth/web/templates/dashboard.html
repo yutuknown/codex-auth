@@ -1765,7 +1765,9 @@
                 .filter(([, value]) => value !== null && value !== undefined && value !== '')
                 .map(([key, value]) => {
                     const label = labels?.[key] || key.replace(/_/g, ' ');
-                    const text = typeof value === 'boolean' ? (value ? 'Enabled' : 'Disabled') : String(value);
+                    const text = typeof value === 'boolean'
+                        ? (value ? 'Enabled' : 'Disabled')
+                        : (typeof value === 'object' ? 'Structured data reported' : String(value));
                     return `<div class="provider-kv-row"><span>${escapeHtml(label)}</span><span>${escapeHtml(text)}</span></div>`;
                 });
             return rows.length ? `<div class="provider-kv">${rows.join('')}</div>` : '<div class="provider-empty">Not reported by this provider.</div>';

@@ -20,8 +20,16 @@ from beta.m365_compat import (
     count_tokens,
     model,
     normalize_public_event,
+    root_head,
 )
 from beta.m365_models import M365ModelCatalog
+
+
+def test_root_head_is_a_side_effect_free_hosting_probe():
+    response = root_head()
+
+    assert response.status_code == 200
+    assert response.body == b""
 
 
 def test_public_contract_names_reasoning_as_summary_and_preserves_lane():

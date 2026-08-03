@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from beta.m365_artifacts import artifact_store
 from beta.m365_bearer import (
@@ -896,6 +896,13 @@ def _unsupported_response(feature: str) -> JSONResponse:
             },
         },
     )
+
+
+@app.head("/")
+def root_head() -> Response:
+    """Provide a side-effect-free hosting and uptime probe."""
+
+    return Response(status_code=200)
 
 
 @app.get("/")

@@ -162,25 +162,136 @@ temporary: update both `CODEX_AUTH_M365_AUTH_JSON` and
 ### Local M365 bearer-only beta
 
 `beta/` contains a deliberately isolated, cookie-free M365 SignalR experiment.
-It is not part of the production registry or Render deployment. Create fresh
-local `beta/ms365-auth.json` and `beta/ms365-route.json` files from the
-redacted examples, including the route identity and OAuth request metadata
-captured from one authenticated M365 chat connection. Check only safe readiness
-state with:
+It is not part of the production registry or Render deployment. Create a fresh
+local `beta/ms365-auth.json` from the redacted example. The beta derives the
+SignalR identity and OAuth renewal metadata from that OAuth response and never
+reads `.codex`, browser cookies, or production credentials. An optional `route`
+override can be embedded in the same JSON if Microsoft changes its claims.
+Check only safe readiness state with:
 
 ```bash
-python -m codex_auth.beta.m365_bearer status
+python beta/m365_bearer.py status
 ```
 
 The live proof is intentionally opt-in and sends one harmless text prompt:
 
 ```powershell
 $env:CODEX_AUTH_M365_BETA_CONFIRM = "1"
-python -m codex_auth.beta.m365_bearer probe
+python beta/m365_bearer.py probe
 ```
+
+Inspect a real prompt's redacted frame schema without printing response text,
+tokens, URLs, headers, or identity:
+
+```powershell
+$env:CODEX_AUTH_M365_BETA_CONFIRM = "1"
+python beta/m365_bearer.py inspect --model gpt-5.5-think-deeper --prompt "Solve 29 * 31 carefully."
+```
+
+The inspector converts replacement snapshots into provider-lane deltas. Text
+and provider-authored reasoning progress remain separate; it does not invent a
+`thoughtSignature` that M365 did not send.
+
+File upload uses a separate, optional Microsoft Graph access token under
+`resources.graph` in the same ignored JSON file. Check readiness or run the
+OneDrive upload stages with:
+
+```powershell
+python beta/m365_files.py status
+$env:CODEX_AUTH_M365_BETA_CONFIRM = "1"
+python beta/m365_files.py upload .\path\to\file.txt
+```
+
+The uploader reproduces the observed zero-cookie Graph upload-session headers,
+creates a OneDrive `copilotuploads` session, and performs extraction warmup.
+It reports only a safe HTTP phase when rejected. A fresh zero-cookie Graph
+credential has now passed upload, extraction, chat binding, and exact-marker
+readback. File input is supported in this beta with the separate Graph bearer;
+it remains out of the production provider.
+
+The compatibility service now acquires that Graph resource bearer from the
+same renewable Microsoft broker session when it is absent or expired. This
+removes the need to manage a second refresh token, but it does not remove the
+separate Graph permission/resource boundary.
+
+Images use a separate path and do not require the Graph credential. The beta
+uploads supported image MIME types directly to Substrate with the Sydney bearer
+and is structured to carry the returned conversation identity into SignalR.
+The supplied capture omitted the multipart **Payload** fields, so the current
+beta request still receives HTTP 500. The returned image `docId` is mapped to an
+`Image` annotation as an explicitly inferred contract; promotion requires the
+complete upload Payload and one sent-frame capture.
+
+Run the local compatibility API on loopback:
+
+```powershell
+$env:CODEX_AUTH_M365_BETA_CONFIRM = "1"
+python -m uvicorn beta.m365_compat:app --host 127.0.0.1 --port 8090
+```
+
+It exposes:
+
+- `GET /v1/models` with source-labelled M365 availability. Aliases are resolved
+  before validating the canonical model and cannot create unavailable models.
+- `POST /v1/messages` with Anthropic Messages streaming. M365
+  `addToChainOfThought` progress becomes a `thinking` block with
+  `thinking_delta` events.
+- `POST /v1/chat/completions` with OpenAI-compatible streaming. The same
+  provider-authored progress appears in `delta.reasoning_content`.
+- Anthropic/OpenAI image input with the proven Sydney upload path. Non-image
+  file blocks use the proven Graph path and require `resources.graph` in the
+  ignored local credential. Unsupported sampling, `max_tokens`,
+  `thinking`, stop sequences, tools, and tool choice are rejected explicitly.
+- `GET /v1/research` lists unproven model, quota, tool, output-image, and
+  native-history contracts without guessing endpoint shapes.
+- `GET /health` with only safe lifecycle metadata.
+- `GET /v1/deployment-readiness` with restart persistence, Graph acquisition,
+  unsigned-reasoning, compiled-history, and caller-tool boundaries.
+
+Both endpoints keep reasoning-summary and answer lanes separate. They never
+invent `signature_delta`, `thoughtSignature`, raw chain-of-thought, or token
+usage that M365 did not provide. Safe citations, suggestions, plugin/code/image
+status are retained under `provider_metadata.m365`; protected URLs are dropped.
+Verified image bytes may be returned as bounded in-memory base64 artifacts;
+unretrievable references remain metadata only.
+
+When Microsoft's SPA refresh window requires a new authorization-code cycle,
+export the new response JSON locally and import it without printing secrets:
+
+```powershell
+python -m beta.m365_auth_recovery .\new-m365-oauth-response.json
+```
+
+The command atomically replaces `beta/ms365-auth.json` while preserving the
+captured route metadata. Both files remain ignored local beta material.
+
+Inspect the model catalog without making an upstream request:
+
+```powershell
+python beta/m365_models.py status
+python beta/m365_models.py list
+```
+
+The optional `model_catalog` and `model_aliases` blocks in
+`beta/ms365-auth.json` can hold an account-captured selector snapshot and local
+aliases. The API clearly identifies `authenticated_chat_shell`,
+`captured_chat_shell`, `live_probe`, or `fallback`; only the first is dynamic.
+Detailed comparison with Antigravity is in `beta/MODEL_MAPPING_AUDIT.md`.
+
+The current live capability evidence is recorded in
+`beta/CAPABILITY_AUDIT.md`.
 
 The beta never loads cookies and must not be treated as production-ready unless
 the probe completes successfully with zero cookies.
+
+For a hosted beta, seed credentials with
+`CODEX_AUTH_M365_BETA_AUTH_JSON`. Refresh rotation stays only in process memory
+unless `CODEX_AUTH_M365_BETA_STATE_FILE` points to mounted persistent storage.
+The readiness endpoint intentionally reports `ready: false` when rotation is
+not restart-durable. Do not place either value in source control or dashboard
+markup. Historical OpenAI tool messages and Anthropic `tool_result` blocks are
+preserved as labelled conversation context; caller-defined tool invocation is
+still rejected before any upstream prompt is submitted.
 
 ## ☁️ Deploy on Render
 

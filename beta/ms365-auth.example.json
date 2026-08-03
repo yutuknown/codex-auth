@@ -3,5 +3,52 @@
   "scope": "https://substrate.office.com/sydney/v2/.default",
   "expires_in": 28800,
   "access_token": "REDACTED",
-  "refresh_token": "REDACTED"
+  "refresh_token": "REDACTED",
+  "refresh_token_expires_in": 86400,
+  "id_token": "REDACTED.JWT.VALUE",
+  "route": {
+    "oauth": {
+      "capture_complete": false,
+      "query": {
+        "brk_client_id": "CAPTURED_BROKER_CLIENT_ID",
+        "brk_redirect_uri": "https://m365.cloud.microsoft/spalanding"
+      },
+      "form": {
+        "redirect_uri": "brk-multihub://Outlook.office.com",
+        "brk_client_id": "CAPTURED_BROKER_CLIENT_ID",
+        "brk_redirect_uri": "https://m365.cloud.microsoft/spalanding",
+        "scope": "https://substrate.office.com/sydney/v2/.default openid profile offline_access",
+        "x-client-VER": "5.9.0",
+        "x-client-current-telemetry": "5|61,0,,,",
+        "x-client-last-telemetry": "5|0|||0,0"
+      }
+    }
+  },
+  "resources": {
+    "graph": {
+      "access_token": "REDACTED_GRAPH_ACCESS_TOKEN",
+      "captured_at": 0,
+      "expires_in": 3600
+    }
+  },
+  "model_catalog": {
+    "source": "captured_chat_shell",
+    "captured_at": 0,
+    "default_tone": "Magic",
+    "models": [
+      {
+        "tone": "Magic",
+        "title": "Auto",
+        "description": "Automatically selects the response mode"
+      },
+      {
+        "tone": "Gpt_5_5_Reasoning",
+        "title": "GPT 5.5 Think Deeper",
+        "reasoning": true
+      }
+    ]
+  },
+  "model_aliases": {
+    "m365-thinking": "gpt-5.5-think-deeper"
+  }
 }

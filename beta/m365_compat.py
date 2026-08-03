@@ -20,6 +20,7 @@ import secrets
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -43,11 +44,16 @@ from beta.m365_models import M365ModelCatalog
 from beta.m365_remote import RemoteAttachmentFetcher
 from beta.m365_research import research_report
 from beta.m365_telemetry import telemetry
+from beta.m365_verification import VERIFICATION_CONTRACT_VERSION, running_commit, safe_latest_verification
 
 API_KEY_ENV = "CODEX_AUTH_M365_BETA_API_KEY"
 ADMIN_KEY_ENV = "CODEX_AUTH_M365_BETA_ADMIN_KEY"
 MAX_CONVERSATION_TURNS = 64
 MAX_COMPILED_PROMPT_CHARACTERS = 200_000
+MAX_ADMIN_CREDENTIAL_BYTES = 48_000
+ADMIN_MUTATIONS_PER_MINUTE = 6
+_admin_mutations: deque[float] = deque()
+_admin_mutation_lock = threading.Lock()
 DATA_URL_PATTERN = re.compile(
     r"^data:(?P<media_type>[^;,]+)?;base64,(?P<data>.*)$",
     re.DOTALL,
@@ -919,13 +925,14 @@ app = FastAPI(title="M365 bearer beta compatibility API")
 
 @app.middleware("http")
 async def optional_api_key_guard(request: Request, call_next: Any) -> Any:
+    path = request.url.path
     expected = os.environ.get(API_KEY_ENV)
-    if expected and request.url.path.startswith("/v1/"):
+    if expected and path.startswith("/v1/"):
         authorization = request.headers.get("authorization", "")
         supplied = request.headers.get("x-api-key", "")
         if authorization.lower().startswith("bearer "):
             supplied = authorization[7:]
-        if supplied != expected:
+        if not secrets.compare_digest(supplied, expected):
             return JSONResponse(
                 status_code=401,
                 content={
@@ -936,13 +943,36 @@ async def optional_api_key_guard(request: Request, call_next: Any) -> Any:
                     },
                 },
             )
-    if request.url.path.startswith("/admin/") and request.method != "GET":
+    is_admin_mutation = (
+        (path.startswith("/admin/") and request.method != "GET")
+        or path == "/refresh-token"
+    )
+    if is_admin_mutation:
         expected_admin = os.environ.get(ADMIN_KEY_ENV) or os.environ.get(API_KEY_ENV)
         supplied_admin = request.headers.get("x-admin-key", "")
         if not expected_admin:
             return JSONResponse(status_code=503, content={"error": "credential administration is not configured"})
         if not secrets.compare_digest(supplied_admin, expected_admin):
             return JSONResponse(status_code=401, content={"error": "invalid admin key"})
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                too_large = int(content_length) > MAX_ADMIN_CREDENTIAL_BYTES
+            except ValueError:
+                return JSONResponse(status_code=400, content={"error": "invalid credential import length"})
+            if too_large:
+                return JSONResponse(status_code=413, content={"error": "credential import is too large"})
+        # Do not trust a missing or forged Content-Length header. Starlette
+        # caches this body for the JSON parser used by the endpoint.
+        if len(await request.body()) > MAX_ADMIN_CREDENTIAL_BYTES:
+            return JSONResponse(status_code=413, content={"error": "credential import is too large"})
+        with _admin_mutation_lock:
+            now = time.monotonic()
+            while _admin_mutations and now - _admin_mutations[0] > 60:
+                _admin_mutations.popleft()
+            if len(_admin_mutations) >= ADMIN_MUTATIONS_PER_MINUTE:
+                return JSONResponse(status_code=429, content={"error": "admin mutation rate limit exceeded"})
+            _admin_mutations.append(now)
     return await call_next(request)
 
 
@@ -1119,6 +1149,10 @@ def health() -> dict[str, Any]:
             "provider": "m365-copilot",
             **M365BearerBeta.from_directory().status(),
             "catalog": M365ModelCatalog.from_directory().safe_status(),
+            "build": {
+                "render_commit": running_commit(),
+                "verification_contract": VERIFICATION_CONTRACT_VERSION,
+            },
         }
     except BetaConfigurationError:
         return {"status": "not_configured", "provider": "m365-copilot", "cookie_count": 0}
@@ -1207,6 +1241,20 @@ def model(model_id: str) -> Any:
 @app.get("/v1/capabilities")
 def capabilities() -> dict[str, Any]:
     return equivalence_report()
+
+
+@app.get("/v1/verification")
+def verification() -> dict[str, Any]:
+    """Return only the current-build verification digest and safe counters."""
+
+    return {
+        "provider": "m365-copilot",
+        "build": {
+            "render_commit": running_commit(),
+            "verification_contract": VERIFICATION_CONTRACT_VERSION,
+        },
+        "verification": safe_latest_verification(),
+    }
 
 
 @app.get("/v1/research")

@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import os
+import time
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -64,6 +65,11 @@ class PostgresCredentialStore:
             "CREATE TABLE IF NOT EXISTS codex_auth_m365_credential "
             "(name text PRIMARY KEY, version bigint NOT NULL, payload bytea NOT NULL)"
         )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS codex_auth_m365_credential_backup "
+            "(id bigserial PRIMARY KEY, version bigint NOT NULL, reason text NOT NULL, "
+            "payload bytea NOT NULL, created_at bigint NOT NULL)"
+        )
 
     def _encrypt(self, value: dict[str, Any]) -> bytes:
         nonce = os.urandom(12)
@@ -113,6 +119,29 @@ class PostgresCredentialStore:
             )
             return next_version
 
+    def backup_current(self, reason: str) -> int | None:
+        """Create an encrypted rollback record without returning its contents."""
+
+        safe_reason = reason if reason in {"import", "refresh", "campaign"} else "unspecified"
+        with self._connect() as connection:
+            self._ensure(connection)
+            connection.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (RECORD_NAME,))
+            row = connection.execute(
+                "SELECT version, payload FROM codex_auth_m365_credential WHERE name=%s FOR UPDATE", (RECORD_NAME,)
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "INSERT INTO codex_auth_m365_credential_backup(version,reason,payload,created_at) VALUES (%s,%s,%s,%s)",
+                (int(row[0]), safe_reason, bytes(row[1]), int(time.time())),
+            )
+            return int(row[0])
+
     @staticmethod
     def safe_status() -> dict[str, Any]:
-        return {"source": "encrypted_external_postgres", "rotation_persistence": "database_atomic", "restart_durable": True}
+        return {
+            "source": "encrypted_external_postgres",
+            "rotation_persistence": "database_atomic",
+            "rollback_records": "encrypted_external_postgres",
+            "restart_durable": True,
+        }

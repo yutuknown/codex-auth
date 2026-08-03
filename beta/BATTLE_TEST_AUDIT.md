@@ -1,5 +1,9 @@
 # M365 beta live battle-test audit
 
+> Historical local evidence only. It does not promote any capability on a
+> hosted build. The authoritative live state is the matching-commit manifest
+> returned by `GET /v1/verification` and rendered by `GET /v1/capabilities`.
+
 Audit date: 2026-08-03
 
 The campaign used only `beta/ms365-auth.json`, zero browser cookies, and

@@ -1,5 +1,9 @@
 # Antigravity equivalence map
 
+> This is a design and historical-evidence comparison. Current M365 states are
+> intentionally resolved from `GET /v1/capabilities`; no row is live-verified
+> until `GET /v1/verification` has a passing manifest for the running commit.
+
 Audit target: `badrisnarayanan/antigravity-claude-proxy` commit
 `055699fcebcac83cea64bf599546a3ce820ebcdb` (version 2.7.7).
 

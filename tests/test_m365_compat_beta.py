@@ -656,13 +656,13 @@ def test_equivalence_report_is_machine_readable_and_truthful():
     response = capabilities()
     mapped = {item["feature"]: item for item in response["features"]}
 
-    assert mapped["oauth_bearer"]["m365_beta"] == "supported"
-    assert mapped["reasoning"]["m365_beta"] == "summary_only"
-    assert mapped["client_function_tools"]["m365_beta"] == "unavailable"
-    assert mapped["dynamic_model_catalog"]["m365_beta"] == "captured_or_fallback"
-    assert mapped["oauth_refresh"]["m365_beta"] == "supported"
-    assert mapped["usage_accounting"]["m365_beta"] == "local_estimate"
-    assert mapped["structured_multi_turn"]["m365_beta"] == "structured_transcript"
+    assert mapped["oauth_bearer"]["m365_beta"] == "implemented"
+    assert mapped["reasoning"]["m365_beta"] == "unsigned_summary"
+    assert mapped["caller_tools_and_results"]["m365_beta"] == "unavailable"
+    assert mapped["dynamic_model_catalog"]["m365_beta"] == "captured_catalog"
+    assert mapped["oauth_refresh_and_durability"]["m365_beta"] == "implemented"
+    assert mapped["usage_and_cache_accounting"]["m365_beta"] == "local_estimate"
+    assert mapped["native_system_and_history"]["m365_beta"] == "compiled_transcript"
 
 
 def test_account_limits_degrades_safely_when_not_configured(monkeypatch):

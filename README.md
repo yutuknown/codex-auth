@@ -162,7 +162,11 @@ temporary: update both `CODEX_AUTH_M365_AUTH_JSON` and
 ### Local M365 bearer-only beta
 
 `beta/` contains a deliberately isolated, cookie-free M365 SignalR experiment.
-It is not part of the production registry or Render deployment. Create a fresh
+It is not part of the production registry. A separately configured Render beta
+is still beta-only: its authoritative capability contract is
+`GET /v1/capabilities`, which promotes a feature to `verified_live` only after
+a redacted verification manifest for that exact deployed commit. Historical
+audit prose is not a live promotion. Create a fresh
 local `beta/ms365-auth.json` from the redacted example. The beta derives the
 SignalR identity and OAuth renewal metadata from that OAuth response and never
 reads `.codex`, browser cookies, or production credentials. An optional `route`
@@ -204,10 +208,9 @@ python beta/m365_files.py upload .\path\to\file.txt
 
 The uploader reproduces the observed zero-cookie Graph upload-session headers,
 creates a OneDrive `copilotuploads` session, and performs extraction warmup.
-It reports only a safe HTTP phase when rejected. A fresh zero-cookie Graph
-credential has now passed upload, extraction, chat binding, and exact-marker
-readback. File input is supported in this beta with the separate Graph bearer;
-it remains out of the production provider.
+It reports only a safe HTTP phase when rejected. File input remains
+`implemented_unverified` until the hosted exact-commit campaign proves upload,
+extraction, annotation binding, and marker readback with its Graph bearer.
 
 The compatibility service now acquires that Graph resource bearer from the
 same renewable Microsoft broker session when it is absent or expired. This
@@ -217,10 +220,8 @@ separate Graph permission/resource boundary.
 Images use a separate path and do not require the Graph credential. The beta
 uploads supported image MIME types directly to Substrate with the Sydney bearer
 and is structured to carry the returned conversation identity into SignalR.
-The supplied capture omitted the multipart **Payload** fields, so the current
-beta request still receives HTTP 500. The returned image `docId` is mapped to an
-`Image` annotation as an explicitly inferred contract; promotion requires the
-complete upload Payload and one sent-frame capture.
+Its advertised state is evidence-driven: image input and generated artifacts
+remain unverified until a matching hosted run records safe structural proof.
 
 Run the local compatibility API on loopback:
 
@@ -238,10 +239,11 @@ It exposes:
   `thinking_delta` events.
 - `POST /v1/chat/completions` with OpenAI-compatible streaming. The same
   provider-authored progress appears in `delta.reasoning_content`.
-- Anthropic/OpenAI image input with the proven Sydney upload path. Non-image
+- Anthropic/OpenAI image input through the implemented Sydney upload path. Non-image
   file blocks use the proven Graph path and require `resources.graph` in the
   ignored local credential. Unsupported sampling, `max_tokens`,
   `thinking`, stop sequences, tools, and tool choice are rejected explicitly.
+- `GET /v1/verification` reports the running commit and a redacted proof digest.
 - `GET /v1/research` lists unproven model, quota, tool, output-image, and
   native-history contracts without guessing endpoint shapes.
 - `GET /health` with only safe lifecycle metadata.
@@ -278,8 +280,8 @@ aliases. The API clearly identifies `authenticated_chat_shell`,
 `captured_chat_shell`, `live_probe`, or `fallback`; only the first is dynamic.
 Detailed comparison with Antigravity is in `beta/MODEL_MAPPING_AUDIT.md`.
 
-The current live capability evidence is recorded in
-`beta/CAPABILITY_AUDIT.md`.
+Historical evidence is recorded in `beta/CAPABILITY_AUDIT.md`; current hosted
+evidence is only the matching-commit digest returned by `/v1/verification`.
 
 The beta never loads cookies and must not be treated as production-ready unless
 the probe completes successfully with zero cookies.

@@ -630,6 +630,7 @@ class M365BearerBeta:
         *,
         session_factory: Callable[[], Any] = lambda: Session(impersonate="chrome"),
         credential_writer: Callable[[dict[str, Any]], None] | None = None,
+        credential_backup: Callable[[str], None] | None = None,
         persistence_status: dict[str, Any] | None = None,
     ) -> None:
         self.credential = credential
@@ -637,6 +638,7 @@ class M365BearerBeta:
         self.credential_path = credential_path
         self.session_factory = session_factory
         self._credential_writer = credential_writer
+        self._credential_backup = credential_backup
         self.persistence_status = persistence_status or {
             "source": "file",
             "rotation_persistence": "host_filesystem",
@@ -696,6 +698,8 @@ class M365BearerBeta:
                     version = store.save(value, version)
 
                 writer = durable_writer
+                def durable_backup(reason: str) -> None:
+                    store.backup_current(reason)
                 credential_path = default_beta_directory() / "ms365-auth.json"
                 persistence = PostgresCredentialStore.safe_status()
             elif os.environ.get(M365_AUTH_JSON_ENV):
@@ -741,6 +745,7 @@ class M365BearerBeta:
             credential_path,
             session_factory=session_factory or (lambda: Session(impersonate="chrome")),
             credential_writer=writer,
+            credential_backup=(durable_backup if directory is None and configured() else None),
             persistence_status=persistence,
         )
 
@@ -771,6 +776,8 @@ class M365BearerBeta:
         rotated = BetaCredential.from_raw(candidate)
         # Validate the preserved route before performing the atomic write.
         BetaRoute.from_raw(_route_from_credential(candidate))
+        if self._credential_backup is not None:
+            self._credential_backup("import")
         self._persist_credential(candidate)
         self.credential = rotated
         self.last_refresh_at = None
@@ -920,6 +927,8 @@ class M365BearerBeta:
         self.refreshing = True
         session = None
         try:
+            if self._credential_backup is not None:
+                self._credential_backup("refresh")
             session = self._new_cookie_free_session()
             form = {**self.route.token_form, "grant_type": "refresh_token", "refresh_token": self.credential.refresh_token}
             response = session.post(

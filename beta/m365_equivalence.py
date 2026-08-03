@@ -98,6 +98,24 @@ def equivalence_report() -> dict[str, Any]:
             ),
         },
         {
+            "feature": "account_custom_instructions",
+            "antigravity": "request_scoped_system_instruction",
+            "m365_beta": "supported_private_read",
+            "evidence": (
+                "zero-cookie live read returned HTTP 200 and a validated instructions array; "
+                "content remains local and is not silently injected into API prompts"
+            ),
+        },
+        {
+            "feature": "account_memory",
+            "antigravity": "client_managed_context",
+            "m365_beta": "supported_private_read",
+            "evidence": (
+                "zero-cookie live read returned HTTP 200 and a validated memories array; "
+                "its personalization conversationId is not misused as a SignalR chat ID"
+            ),
+        },
+        {
             "feature": "client_function_tools",
             "antigravity": "supported",
             "m365_beta": "unavailable",
@@ -228,6 +246,8 @@ def equivalence_report() -> dict[str, Any]:
         "pre_submit_adaptive": "verified_but_not_public",
         "local_estimate": "verified_but_not_public",
         "captured_or_fallback": "experimental",
+        "experimental_private_read": "experimental",
+        "supported_private_read": "verified_but_not_public",
         "unavailable": "blocked_by_upstream",
         "out_of_scope": "unavailable",
     }

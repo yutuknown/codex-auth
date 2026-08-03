@@ -10,10 +10,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
+import inspect
 import json
 import mimetypes
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -22,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from beta.m365_artifacts import artifact_store
 from beta.m365_bearer import (
@@ -31,6 +34,7 @@ from beta.m365_bearer import (
     BetaUpstreamError,
     M365BearerBeta,
 )
+from beta.m365_conversations import ConversationConflict, coordinator
 from beta.m365_equivalence import equivalence_report
 from beta.m365_events import public_event
 from beta.m365_files import GraphCredential, M365GraphUploader
@@ -41,6 +45,7 @@ from beta.m365_research import research_report
 from beta.m365_telemetry import telemetry
 
 API_KEY_ENV = "CODEX_AUTH_M365_BETA_API_KEY"
+ADMIN_KEY_ENV = "CODEX_AUTH_M365_BETA_ADMIN_KEY"
 MAX_CONVERSATION_TURNS = 64
 MAX_COMPILED_PROMPT_CHARACTERS = 200_000
 DATA_URL_PATTERN = re.compile(
@@ -689,6 +694,7 @@ async def _provider_events(
     prompt: str,
     model: str,
     attachments: list[Any] | None = None,
+    conversation_token: dict[str, str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     if os.environ.get(BETA_CONFIRM_ENV) != "1":
         raise BetaConfigurationError(
@@ -714,6 +720,7 @@ async def _provider_events(
                 resolved.canonical_id,
                 resolved.model.tone,
                 attachments,
+                conversation_id=(conversation_token or {}).get("upstream_id"),
             )
             telemetry.record(
                 "generation_completed",
@@ -749,11 +756,28 @@ async def _provider_events(
         if item_type == "event":
             yield value
         elif item_type == "error":
+            if conversation_token is not None:
+                coordinator.fail(conversation_token)
             if isinstance(value, (BetaConfigurationError, BetaUpstreamError)):
                 raise value
             raise BetaUpstreamError("compatibility_stream_failed") from value
         else:
             break
+    if conversation_token is not None:
+        coordinator.complete(
+            conversation_token,
+            result={"state": "completed"},
+        )
+
+
+def _call_provider_events(
+    prompt: str, model: str, attachments: list[Any] | None, conversation_token: dict[str, str] | None
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Keep existing local test hooks compatible with the added context arg."""
+
+    if "conversation_token" in inspect.signature(_provider_events).parameters:
+        return _provider_events(prompt, model, attachments, conversation_token)
+    return _provider_events(prompt, model, attachments)
 
 
 def _anthropic_sse(event: dict[str, Any]) -> str:
@@ -764,19 +788,26 @@ def _openai_sse(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
 
 
+def _responses_sse(event: dict[str, Any]) -> str:
+    return f"event: {event['type']}\ndata: {json.dumps(event, separators=(',', ':'))}\n\n"
+
+
 async def anthropic_event_stream(
     prompt: str,
     model: str,
     attachments: list[Any] | None = None,
+    conversation_token: dict[str, str] | None = None,
 ) -> AsyncGenerator[str, None]:
     encoder = AnthropicStreamEncoder(model, input_text=prompt)
     emitted = False
     try:
-        async for event in _provider_events(prompt, model, attachments):
+        async for event in _call_provider_events(prompt, model, attachments, conversation_token):
             for output in encoder.feed(event):
                 emitted = True
                 yield _anthropic_sse(output)
     except (BetaConfigurationError, BetaUpstreamError) as exc:
+        if conversation_token is not None:
+            coordinator.fail(conversation_token)
         if not emitted:
             raise
         error = {
@@ -785,6 +816,8 @@ async def anthropic_event_stream(
         }
         yield _anthropic_sse(error)
         return
+    if conversation_token is not None:
+        coordinator.complete(conversation_token, result={"state": "completed"})
     for output in encoder.finish():
         yield _anthropic_sse(output)
 
@@ -793,24 +826,63 @@ async def openai_event_stream(
     prompt: str,
     model: str,
     attachments: list[Any] | None = None,
+    conversation_token: dict[str, str] | None = None,
 ) -> AsyncGenerator[str, None]:
     encoder = OpenAIStreamEncoder(model, input_text=prompt)
     emitted = False
     try:
-        async for event in _provider_events(prompt, model, attachments):
+        async for event in _call_provider_events(prompt, model, attachments, conversation_token):
             for output in encoder.feed(event):
                 emitted = True
                 yield _openai_sse(output)
     except (BetaConfigurationError, BetaUpstreamError) as exc:
+        if conversation_token is not None:
+            coordinator.fail(conversation_token)
         if not emitted:
             raise
         error = {"error": {"type": "upstream_error", "message": str(exc)}}
         yield _openai_sse(error)
         yield "data: [DONE]\n\n"
         return
+    if conversation_token is not None:
+        coordinator.complete(conversation_token, result={"state": "completed"})
     for output in encoder.finish():
         yield _openai_sse(output)
     yield "data: [DONE]\n\n"
+
+
+async def responses_event_stream(
+    prompt: str,
+    model: str,
+    attachments: list[Any] | None = None,
+    conversation_token: dict[str, str] | None = None,
+) -> AsyncGenerator[str, None]:
+    """Translate M365 lanes to the public Responses streaming vocabulary."""
+
+    response_id = f"resp_{uuid.uuid4().hex}"
+    sequence = 0
+
+    def envelope(event_type: str, **fields: Any) -> dict[str, Any]:
+        nonlocal sequence
+        sequence += 1
+        return {"type": event_type, "sequence_number": sequence, "response_id": response_id, **fields}
+
+    yield _responses_sse(envelope("response.created", response={"id": response_id, "object": "response", "status": "in_progress", "model": model}))
+    try:
+        async for event in _call_provider_events(prompt, model, attachments, conversation_token):
+            event_type = event.get("type")
+            delta = str(event.get("delta") or "")
+            if event_type == "reasoning_summary_delta" and delta:
+                yield _responses_sse(envelope("response.reasoning_summary_text.delta", delta=delta, output_index=0, summary_index=0))
+            elif event_type == "text_delta" and delta:
+                yield _responses_sse(envelope("response.output_text.delta", delta=delta, output_index=1, content_index=0))
+    except (BetaConfigurationError, BetaUpstreamError):
+        if conversation_token is not None:
+            coordinator.fail(conversation_token)
+        raise
+    if conversation_token is not None:
+        coordinator.complete(conversation_token, result={"state": "completed"})
+    yield _responses_sse(envelope("response.completed", response={"id": response_id, "object": "response", "status": "completed", "model": model, "provider_metadata": {"m365": {"conversation": coordinator.public_metadata(conversation_token) if conversation_token else None, "reasoning": _reasoning_contract()}}}))
 
 
 async def _preflight_stream(
@@ -864,6 +936,13 @@ async def optional_api_key_guard(request: Request, call_next: Any) -> Any:
                     },
                 },
             )
+    if request.url.path.startswith("/admin/") and request.method != "GET":
+        expected_admin = os.environ.get(ADMIN_KEY_ENV) or os.environ.get(API_KEY_ENV)
+        supplied_admin = request.headers.get("x-admin-key", "")
+        if not expected_admin:
+            return JSONResponse(status_code=503, content={"error": "credential administration is not configured"})
+        if not secrets.compare_digest(supplied_admin, expected_admin):
+            return JSONResponse(status_code=401, content={"error": "invalid admin key"})
     return await call_next(request)
 
 
@@ -898,6 +977,80 @@ def _unsupported_response(feature: str) -> JSONResponse:
     )
 
 
+def _conversation_token(
+    payload: dict[str, Any], prepared: PreparedM365Conversation, http_request: Request = None
+) -> dict[str, Any]:
+    """Resolve an opaque proxy key; prompts only enter the HMAC, never state."""
+
+    explicit = payload.get("conversation") or payload.get("previous_response_id")
+    if isinstance(explicit, dict):
+        explicit = explicit.get("id")
+    if not explicit and http_request is not None:
+        explicit = http_request.headers.get("x-codex-conversation-id")
+    if not explicit and http_request is None:
+        # Direct Python callers have no request boundary on which to base
+        # continuity; avoid coupling unrelated unit/in-process calls.
+        explicit = f"direct:{uuid.uuid4().hex}"
+    first_user = next((turn.text for turn in prepared.turns if turn.role == "user"), prepared.prompt)
+    return coordinator.acquire(
+        explicit_id=str(explicit) if explicit else None,
+        first_user_text=first_user,
+        request_text=prepared.prompt,
+        turn_hashes=tuple(
+            hashlib.sha256(f"{turn.role}\0{turn.text}".encode()).hexdigest()
+            for turn in prepared.turns
+        ),
+    )
+
+
+def _continuation_prompt(
+    prepared: PreparedM365Conversation, token: dict[str, Any]
+) -> str:
+    """Send only appended turns when the upstream conversation already exists."""
+
+    delta_start = int(token.get("delta_start") or 0)
+    continuity = token.get("continuity")
+    if continuity not in {"continued", "rolled_over", "forked"} or delta_start <= 0:
+        return prepared.prompt
+    appended = prepared.turns[delta_start:]
+    if not appended:
+        raise ConversationConflict("conversation_request_already_completed")
+    return _compile_conversation(
+        appended,
+        prepared.system_text if continuity in {"rolled_over", "forked"} else "",
+    )
+
+
+def _responses_messages(value: Any) -> list[dict[str, Any]]:
+    """Normalize the supported Responses input subset into compatibility turns."""
+
+    if isinstance(value, str):
+        return [{"role": "user", "content": value}]
+    if not isinstance(value, list):
+        raise BetaConfigurationError("Responses input must be text or an input-item array")
+    messages: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise BetaConfigurationError("Responses input contains an invalid item")
+        item_type = str(item.get("type") or "message")
+        if item_type not in {"message", "input_text"}:
+            raise BetaConfigurationError(f"Responses input type '{item_type}' is not supported")
+        role = str(item.get("role") or "user")
+        content = item.get("content")
+        if item_type == "input_text":
+            content = item.get("text")
+        if isinstance(content, list):
+            converted: list[dict[str, Any]] = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in {"input_text", "output_text"}:
+                    converted.append({"type": "text", "text": str(block.get("text") or "")})
+                else:
+                    converted.append(block)
+            content = converted
+        messages.append({"role": role, "content": content})
+    return messages
+
+
 @app.head("/")
 def root_head() -> Response:
     """Provide a side-effect-free hosting and uptime probe."""
@@ -924,8 +1077,38 @@ def root() -> dict[str, Any]:
             "/v1/models",
             "/v1/messages",
             "/v1/chat/completions",
+            "/v1/responses",
         ],
     }
+
+
+@app.get("/admin/credentials", response_class=HTMLResponse)
+def credential_admin_page() -> str:
+    """Small no-storage reauthorization page; submitted text is cleared client-side."""
+
+    return """<!doctype html><html><head><meta charset='utf-8'><title>M365 credentials</title>
+<style>body{font:16px system-ui;max-width:760px;margin:3rem auto;padding:0 1rem}textarea,input{width:100%;box-sizing:border-box;margin:.5rem 0;padding:.75rem}textarea{min-height:260px}button{padding:.7rem 1rem}pre{white-space:pre-wrap}</style></head>
+<body><h1>M365 generation credentials</h1><p>Paste a newly acquired OAuth JSON response. With encrypted Postgres configured, replacement credentials survive restarts.</p>
+<input id='key' type='password' autocomplete='off' placeholder='Admin key'><textarea id='credential' spellcheck='false' placeholder='OAuth JSON'></textarea>
+<button id='submit'>Import / Replace</button><pre id='status'></pre><script>
+const box=document.getElementById('credential'),status=document.getElementById('status');
+document.getElementById('submit').onclick=async()=>{status.textContent='Importing…';try{const value=JSON.parse(box.value);const response=await fetch('/admin/credentials/import',{method:'POST',headers:{'content-type':'application/json','x-admin-key':document.getElementById('key').value},body:JSON.stringify({credential:value})});status.textContent=JSON.stringify(await response.json(),null,2)}catch(error){status.textContent='Import failed: '+error.message}finally{box.value='';document.getElementById('key').value=''}};
+</script></body></html>"""
+
+
+@app.post("/admin/credentials/import")
+def import_credentials(payload: dict[str, Any]) -> Any:
+    try:
+        value = payload.get("credential")
+        if not isinstance(value, dict):
+            raise BetaConfigurationError("credential must be a JSON object")
+        beta = M365BearerBeta.from_directory()
+        state = beta.replace_credential(value)
+        return {"status": "ok", "provider": "m365-copilot", "credential": state, "secrets_returned": False}
+    except BetaConfigurationError as exc:
+        return JSONResponse(status_code=400, content={"status": "error", "error": str(exc)})
+    except BetaUpstreamError as exc:
+        return JSONResponse(status_code=502, content={"status": "error", "error": str(exc)})
 
 
 @app.get("/health")
@@ -1128,7 +1311,7 @@ def count_tokens() -> JSONResponse:
 
 
 @app.post("/v1/messages")
-async def anthropic_messages(request: dict[str, Any]) -> Any:
+async def anthropic_messages(request: dict[str, Any], http_request: Request = None) -> Any:
     unsupported = _unsupported_request_feature(request)
     if unsupported:
         return _unsupported_response(unsupported)
@@ -1149,10 +1332,15 @@ async def anthropic_messages(request: dict[str, Any]) -> Any:
             },
         )
     model = str(request.get("model") or "auto")
+    try:
+        conversation_token = _conversation_token(request, prepared, http_request)
+        prompt = _continuation_prompt(prepared, conversation_token)
+    except ConversationConflict as exc:
+        return JSONResponse(status_code=409, content={"type": "error", "error": {"type": "conflict_error", "message": str(exc)}})
     if request.get("stream"):
         try:
             stream = await _preflight_stream(
-                anthropic_event_stream(prompt, model, attachments)
+                anthropic_event_stream(prompt, model, attachments, conversation_token)
             )
         except (BetaConfigurationError, BetaUpstreamError) as exc:
             return JSONResponse(
@@ -1165,11 +1353,15 @@ async def anthropic_messages(request: dict[str, Any]) -> Any:
         return StreamingResponse(
             stream,
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Codex-Conversation-ID": conversation_token["proxy_id"],
+            },
         )
     events: list[dict[str, Any]] = []
     try:
-        async for event in _provider_events(prompt, model, attachments):
+        async for event in _call_provider_events(prompt, model, attachments, conversation_token):
             events.append(event)
     except (BetaConfigurationError, BetaUpstreamError) as exc:
         return JSONResponse(
@@ -1199,12 +1391,12 @@ async def anthropic_messages(request: dict[str, Any]) -> Any:
             "source": usage["source"],
             "upstream_reported": usage["upstream_reported"],
         },
-        "provider_metadata": prepared.safe_status(),
+        "provider_metadata": {**prepared.safe_status(), "conversation": coordinator.public_metadata(conversation_token)},
     }
 
 
 @app.post("/v1/chat/completions")
-async def openai_chat_completions(request: dict[str, Any]) -> Any:
+async def openai_chat_completions(request: dict[str, Any], http_request: Request = None) -> Any:
     unsupported = _unsupported_request_feature(request)
     if unsupported:
         return _unsupported_response(unsupported)
@@ -1221,10 +1413,15 @@ async def openai_chat_completions(request: dict[str, Any]) -> Any:
             },
         )
     model = str(request.get("model") or "auto")
+    try:
+        conversation_token = _conversation_token(request, prepared, http_request)
+        prompt = _continuation_prompt(prepared, conversation_token)
+    except ConversationConflict as exc:
+        return JSONResponse(status_code=409, content={"error": {"type": "conflict_error", "message": str(exc)}})
     if request.get("stream"):
         try:
             stream = await _preflight_stream(
-                openai_event_stream(prompt, model, attachments)
+                openai_event_stream(prompt, model, attachments, conversation_token)
             )
         except (BetaConfigurationError, BetaUpstreamError) as exc:
             return JSONResponse(
@@ -1236,11 +1433,15 @@ async def openai_chat_completions(request: dict[str, Any]) -> Any:
         return StreamingResponse(
             stream,
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Codex-Conversation-ID": conversation_token["proxy_id"],
+            },
         )
     events: list[dict[str, Any]] = []
     try:
-        async for event in _provider_events(prompt, model, attachments):
+        async for event in _call_provider_events(prompt, model, attachments, conversation_token):
             events.append(event)
     except (BetaConfigurationError, BetaUpstreamError) as exc:
         return JSONResponse(
@@ -1274,5 +1475,65 @@ async def openai_chat_completions(request: dict[str, Any]) -> Any:
             "source": usage["source"],
             "upstream_reported": usage["upstream_reported"],
         },
-        "provider_metadata": prepared.safe_status(),
+        "provider_metadata": {**prepared.safe_status(), "conversation": coordinator.public_metadata(conversation_token)},
+    }
+
+
+@app.post("/v1/responses")
+async def openai_responses(request: dict[str, Any], http_request: Request = None) -> Any:
+    unsupported = _unsupported_request_feature(request)
+    if unsupported:
+        return _unsupported_response(unsupported)
+    try:
+        prepared = _prepare_messages(
+            _responses_messages(request.get("input")),
+            request.get("instructions"),
+        )
+        prompt, attachments = prepared
+        conversation_token = _conversation_token(request, prepared, http_request)
+        prompt = _continuation_prompt(prepared, conversation_token)
+    except ConversationConflict as exc:
+        return JSONResponse(status_code=409, content={"error": {"type": "conflict_error", "message": str(exc)}})
+    except BetaConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    model = str(request.get("model") or "auto")
+    if request.get("stream"):
+        try:
+            stream = await _preflight_stream(
+                responses_event_stream(prompt, model, attachments, conversation_token)
+            )
+        except (BetaConfigurationError, BetaUpstreamError) as exc:
+            return JSONResponse(status_code=502, content={"error": {"type": "upstream_error", "message": str(exc)}})
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Codex-Conversation-ID": conversation_token["proxy_id"],
+            },
+        )
+
+    events: list[dict[str, Any]] = []
+    try:
+        async for event in _call_provider_events(prompt, model, attachments, conversation_token):
+            events.append(event)
+    except (BetaConfigurationError, BetaUpstreamError) as exc:
+        coordinator.fail(conversation_token)
+        return JSONResponse(status_code=502, content={"error": {"type": "upstream_error", "message": str(exc)}})
+    reasoning, text = _collect_content(events)
+    output: list[dict[str, Any]] = []
+    if reasoning:
+        output.append({"id": f"rs_{uuid.uuid4().hex}", "type": "reasoning", "summary": [{"type": "summary_text", "text": reasoning}]})
+    output.append({"id": f"msg_{uuid.uuid4().hex}", "type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": text, "annotations": []}]})
+    usage = _usage_estimate(prompt, reasoning + text)
+    return {
+        "id": f"resp_{uuid.uuid4().hex}",
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": model,
+        "output": output,
+        "usage": {"input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"], "total_tokens": usage["total_tokens"]},
+        "provider_metadata": {"m365": {**prepared.safe_status(), "conversation": coordinator.public_metadata(conversation_token), "reasoning": _reasoning_contract()}},
     }

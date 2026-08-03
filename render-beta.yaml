@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: codex-auth-m365-beta
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    autoDeployTrigger: off
+    envVars:
+      - key: CODEX_AUTH_BETA_MODE
+        value: "1"
+      - key: CODEX_AUTH_M365_BETA_AUTH_JSON
+        sync: false
+      - key: CODEX_AUTH_M365_BETA_API_KEY
+        generateValue: true
+      - key: CODEX_AUTH_M365_BETA_ADMIN_KEY
+        generateValue: true
+      - key: CODEX_AUTH_M365_BETA_CONVERSATION_HMAC_KEY
+        generateValue: true
+      - key: CODEX_AUTH_M365_BETA_DATABASE_URL
+        sync: false
+      - key: CODEX_AUTH_M365_BETA_CREDENTIAL_KEY
+        sync: false

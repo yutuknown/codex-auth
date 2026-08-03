@@ -676,21 +676,52 @@ class M365BearerBeta:
     @classmethod
     def from_directory(cls, directory: Path | None = None, *, session_factory: Callable[[], Any] | None = None) -> "M365BearerBeta":
         writer: Callable[[dict[str, Any]], None] | None = None
-        if directory is None and os.environ.get(M365_AUTH_JSON_ENV):
-            raw, state_path = _environment_credential()
-            credential_path = state_path or (default_beta_directory() / "ms365-auth.json")
+        if directory is None:
+            # Hosted mode uses one encrypted external record.  The configured
+            # environment JSON is only a bootstrap when the record is empty.
+            try:
+                from beta.m365_durable import PostgresCredentialStore, configured
+            except ImportError:  # pragma: no cover - package dependency failure
+                def configured() -> bool:
+                    return False
+            if configured():
+                store = PostgresCredentialStore()
+                raw, version = store.load()
+                if raw is None:
+                    raw, _ = _environment_credential()
+                    version = store.save(raw)
 
-            def environment_writer(value: dict[str, Any]) -> None:
-                _save_environment_credential(value, state_path)
+                def durable_writer(value: dict[str, Any]) -> None:
+                    nonlocal version
+                    version = store.save(value, version)
 
-            writer = environment_writer
-            persistence = {
-                "source": "environment",
-                "rotation_persistence": (
-                    "state_file" if state_path is not None else "process_memory"
-                ),
-                "restart_durable": state_path is not None,
-            }
+                writer = durable_writer
+                credential_path = default_beta_directory() / "ms365-auth.json"
+                persistence = PostgresCredentialStore.safe_status()
+            elif os.environ.get(M365_AUTH_JSON_ENV):
+                raw, state_path = _environment_credential()
+                credential_path = state_path or (default_beta_directory() / "ms365-auth.json")
+
+                def environment_writer(value: dict[str, Any]) -> None:
+                    _save_environment_credential(value, state_path)
+
+                writer = environment_writer
+                persistence = {
+                    "source": "environment",
+                    "rotation_persistence": (
+                        "state_file" if state_path is not None else "process_memory"
+                    ),
+                    "restart_durable": state_path is not None,
+                }
+            else:
+                base = default_beta_directory()
+                credential_path = base / "ms365-auth.json"
+                raw = _read_json(credential_path)
+                persistence = {
+                    "source": "file",
+                    "rotation_persistence": "host_filesystem",
+                    "restart_durable": False,
+                }
         else:
             base = directory or default_beta_directory()
             credential_path = base / "ms365-auth.json"
@@ -718,6 +749,34 @@ class M365BearerBeta:
             self._credential_writer(value)
         else:
             _atomic_write_json(self.credential_path, value)
+
+    def replace_credential(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Replace active OAuth values while preserving captured route metadata."""
+
+        if not isinstance(response, dict):
+            raise BetaConfigurationError("credential import must be a JSON object")
+        allowed = {
+            "token_type", "scope", "expires_in", "ext_expires_in", "access_token",
+            "refresh_token", "refresh_token_expires_in", "id_token", "client_info",
+        }
+        candidate = {
+            **{
+                key: self.credential.raw[key]
+                for key in ("route", "resources", "model_catalog", "model_aliases", "variants")
+                if key in self.credential.raw
+            },
+            **{key: response[key] for key in allowed if key in response},
+            "captured_at": int(time.time()),
+        }
+        rotated = BetaCredential.from_raw(candidate)
+        # Validate the preserved route before performing the atomic write.
+        BetaRoute.from_raw(_route_from_credential(candidate))
+        self._persist_credential(candidate)
+        self.credential = rotated
+        self.last_refresh_at = None
+        self.last_refresh_outcome = None
+        self.last_refresh_error_code = None
+        return self.status()
 
     @property
     def seconds_until_expiry(self) -> int:
@@ -1151,6 +1210,7 @@ class M365BearerBeta:
         observer: Callable[[dict[str, Any], int], None] | None = None,
         tone: str | None = None,
         attachments: list[M365Attachment] | None = None,
+        conversation_id: str | None = None,
     ) -> str:
         if not prompt.strip():
             raise BetaConfigurationError("probe prompt must not be empty")
@@ -1168,8 +1228,16 @@ class M365BearerBeta:
                 raise BetaConfigurationError(
                     "all image attachments must share one conversation ID"
                 )
+            if (
+                conversation_id
+                and attachment_conversation_ids
+                and conversation_id not in attachment_conversation_ids
+            ):
+                raise BetaConfigurationError(
+                    "attachment conversation does not match the requested conversation"
+                )
             session_id = str(uuid.uuid4())
-            conversation_id = (
+            active_conversation_id = conversation_id or (
                 next(iter(attachment_conversation_ids))
                 if attachment_conversation_ids
                 else str(uuid.uuid4())
@@ -1192,7 +1260,7 @@ class M365BearerBeta:
                     websocket = self._connect(
                         session,
                         session_id,
-                        conversation_id,
+                        active_conversation_id,
                         request_id,
                         connection_variants,
                     )
@@ -1275,8 +1343,10 @@ class M365BearerBeta:
                 websocket.close()
             session.close()
 
-    def generate(self, prompt: str, model: str = "auto") -> str:
-        return self._exchange(prompt, model)
+    def generate(
+        self, prompt: str, model: str = "auto", *, conversation_id: str | None = None
+    ) -> str:
+        return self._exchange(prompt, model, conversation_id=conversation_id)
 
     def generate_stream(
         self,
@@ -1285,6 +1355,7 @@ class M365BearerBeta:
         model: str = "auto",
         tone: str | None = None,
         attachments: list[M365Attachment] | None = None,
+        conversation_id: str | None = None,
     ) -> str:
         assembler = M365StreamAssembler()
 
@@ -1296,7 +1367,9 @@ class M365BearerBeta:
             ):
                 emit(event)
 
-        return self._exchange(prompt, model, observe, tone, attachments)
+        return self._exchange(
+            prompt, model, observe, tone, attachments, conversation_id
+        )
 
     def inspect(self, prompt: str, model: str = "auto") -> dict[str, Any]:
         frame_types: Counter[str] = Counter()

@@ -168,7 +168,7 @@ def dashboard_html() -> str:
     )
     html = html.replace(
         "</script></body></html>",
-        "const recovery=document.querySelector('#oauthPanel details');const legacy=document.querySelector('#account .legacy-account-recovery');if(recovery&&legacy)recovery.appendChild(legacy);</script></body></html>",
+        ";const recovery=document.querySelector('#oauthPanel details');const legacy=document.querySelector('#account .legacy-account-recovery');if(recovery&&legacy)recovery.appendChild(legacy);</script></body></html>",
     )
     return html
 

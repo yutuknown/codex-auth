@@ -741,13 +741,33 @@ async def _provider_events(
     def run() -> None:
         started = time.monotonic()
         try:
+            provider_conversation_id = (conversation_token or {}).get("upstream_id")
+            attachment_conversation_ids = {
+                str(attachment.conversation_id)
+                for attachment in attachments or []
+                if getattr(attachment, "conversation_id", None)
+            }
+            if len(attachment_conversation_ids) > 1:
+                raise BetaConfigurationError(
+                    "all image attachments must share one conversation ID"
+                )
+            if attachment_conversation_ids:
+                # UploadFile is authoritative for image turns. Adopt its
+                # opaque ID before opening SignalR so the upload and chat
+                # invocation cannot diverge.
+                provider_conversation_id = next(iter(attachment_conversation_ids))
+                if conversation_token is not None:
+                    coordinator.adopt_upstream_id(
+                        conversation_token,
+                        provider_conversation_id,
+                    )
             answer = beta.generate_stream(
                 prompt,
                 emit,
                 resolved.canonical_id,
                 resolved.model.tone,
                 attachments,
-                conversation_id=(conversation_token or {}).get("upstream_id"),
+                conversation_id=provider_conversation_id,
             )
             telemetry.record(
                 "generation_completed",

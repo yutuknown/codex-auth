@@ -196,6 +196,24 @@ class ConversationCoordinator:
     def fail(self, token: dict[str, Any]) -> None:
         self.complete(token)
 
+    def adopt_upstream_id(self, token: dict[str, Any], upstream_id: str) -> None:
+        """Bind a verified attachment conversation to the active turn.
+
+        M365 assigns the conversation ID during image upload.  The proxy may
+        reserve its coordinator entry before that upload completes, so the
+        transport must adopt the opaque upstream ID returned by the upload
+        rather than sending a mismatched ID to SignalR.
+        """
+
+        value = str(upstream_id or "").strip()
+        if not value:
+            return
+        with self._lock:
+            for item in self._items.values():
+                if item.proxy_id == token.get("proxy_id"):
+                    item.upstream_id = value
+                    return
+
     @staticmethod
     def public_metadata(token: dict[str, Any]) -> dict[str, Any]:
         return {

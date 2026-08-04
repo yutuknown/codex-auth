@@ -26,6 +26,23 @@ def test_conversation_coordinator_reuses_upstream_id_and_blocks_inflight_duplica
         coordinator.acquire(explicit_id="thread", first_user_text="other", request_text="turn two")
 
 
+def test_conversation_coordinator_adopts_uploaded_attachment_conversation_id():
+    coordinator = ConversationCoordinator(secret="attachment")
+    token = coordinator.acquire(
+        explicit_id="thread",
+        first_user_text="describe image",
+        request_text="image turn",
+    )
+    coordinator.adopt_upstream_id(token, "uploaded-conversation")
+    coordinator.complete(token)
+    next_token = coordinator.acquire(
+        explicit_id="thread",
+        first_user_text="describe image",
+        request_text="next turn",
+    )
+    assert next_token["upstream_id"] == "uploaded-conversation"
+
+
 def test_conversation_coordinator_returns_bounded_completed_response_copy():
     coordinator = ConversationCoordinator(secret="cache", now=lambda: 100)
     first = coordinator.acquire(

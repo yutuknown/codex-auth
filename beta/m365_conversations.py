@@ -38,6 +38,7 @@ class _Conversation:
     completed: dict[str, dict[str, Any]] = field(default_factory=dict)
     turn_hashes: tuple[str, ...] = ()
     upstream_turns: int = 0
+    model_id: str | None = None
 
 
 class ConversationCoordinator:
@@ -87,6 +88,7 @@ class ConversationCoordinator:
         first_user_text: str,
         request_text: str,
         turn_hashes: tuple[str, ...] = (),
+        model_id: str | None = None,
     ) -> dict[str, Any]:
         """Reserve a turn and return only a safe proxy id plus internal upstream id."""
 
@@ -102,7 +104,24 @@ class ConversationCoordinator:
                 self._items[key] = item
             delta_start = 0
             continuity = "new"
-            if not is_new and turn_hashes and item.turn_hashes:
+            normalized_model = (model_id or "").strip().lower() or None
+            model_changed = bool(
+                not is_new
+                and normalized_model
+                and item.model_id
+                and normalized_model != item.model_id
+            )
+            if model_changed:
+                # M365 Web starts a new upstream chat when the selected model
+                # changes. Keep the caller's proxy conversation stable, but
+                # fork the provider conversation and replay only bounded recent
+                # context so a local chat can continue naturally.
+                item.upstream_id = str(uuid.uuid4())
+                item.completed.clear()
+                continuity = "model_switched"
+                delta_start = max(0, len(turn_hashes) - ROLLOVER_CONTEXT_TURNS)
+                item.upstream_turns = len(turn_hashes) - delta_start
+            elif not is_new and turn_hashes and item.turn_hashes:
                 if turn_hashes[: len(item.turn_hashes)] == item.turn_hashes:
                     delta_start = len(item.turn_hashes)
                     continuity = "continued"
@@ -132,6 +151,8 @@ class ConversationCoordinator:
                 item.turn_hashes = turn_hashes
                 if is_new:
                     item.upstream_turns = len(turn_hashes)
+            if normalized_model:
+                item.model_id = normalized_model
             return {
                 "proxy_id": item.proxy_id,
                 "upstream_id": item.upstream_id,
@@ -163,6 +184,7 @@ class ConversationCoordinator:
             "provider": "m365-copilot",
             "upstream_continuity": token.get("continuity", "continued"),
             "rollover": token.get("continuity") == "rolled_over",
+            "model_switch": token.get("continuity") == "model_switched",
         }
 
 

@@ -49,6 +49,18 @@ from beta.m365_events import public_event
 from beta.m365_files import GraphCredential, M365GraphUploader
 from beta.m365_images import M365SubstrateImageUploader
 from beta.m365_models import M365ModelCatalog
+from beta.m365_oauth import (
+    consume as oauth_consume,
+)
+from beta.m365_oauth import (
+    exchange as oauth_exchange,
+)
+from beta.m365_oauth import (
+    import_server_response,
+)
+from beta.m365_oauth import (
+    start as oauth_start,
+)
 from beta.m365_remote import RemoteAttachmentFetcher
 from beta.m365_research import research_report
 from beta.m365_telemetry import telemetry
@@ -1024,7 +1036,10 @@ def _unsupported_response(feature: str) -> JSONResponse:
 
 
 def _conversation_token(
-    payload: dict[str, Any], prepared: PreparedM365Conversation, http_request: Request = None
+    payload: dict[str, Any],
+    prepared: PreparedM365Conversation,
+    http_request: Request = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Resolve an opaque proxy key; prompts only enter the HMAC, never state."""
 
@@ -1046,6 +1061,7 @@ def _conversation_token(
             hashlib.sha256(f"{turn.role}\0{turn.text}".encode()).hexdigest()
             for turn in prepared.turns
         ),
+        model_id=model,
     )
 
 
@@ -1056,14 +1072,16 @@ def _continuation_prompt(
 
     delta_start = int(token.get("delta_start") or 0)
     continuity = token.get("continuity")
-    if continuity not in {"continued", "rolled_over", "forked"} or delta_start <= 0:
+    if continuity not in {"continued", "rolled_over", "forked", "model_switched"} or delta_start <= 0:
         return prepared.prompt
     appended = prepared.turns[delta_start:]
     if not appended:
         raise ConversationConflict("conversation_request_already_completed")
     return _compile_conversation(
         appended,
-        prepared.system_text if continuity in {"rolled_over", "forked"} else "",
+        prepared.system_text
+        if continuity in {"rolled_over", "forked", "model_switched"}
+        else "",
     )
 
 
@@ -1391,7 +1409,7 @@ async def anthropic_messages(request: dict[str, Any], http_request: Request = No
         )
     model = str(request.get("model") or "auto")
     try:
-        conversation_token = _conversation_token(request, prepared, http_request)
+        conversation_token = _conversation_token(request, prepared, http_request, model)
         prompt = _continuation_prompt(prepared, conversation_token)
     except ConversationConflict as exc:
         return JSONResponse(status_code=409, content={"type": "error", "error": {"type": "conflict_error", "message": str(exc)}})
@@ -1472,7 +1490,7 @@ async def openai_chat_completions(request: dict[str, Any], http_request: Request
         )
     model = str(request.get("model") or "auto")
     try:
-        conversation_token = _conversation_token(request, prepared, http_request)
+        conversation_token = _conversation_token(request, prepared, http_request, model)
         prompt = _continuation_prompt(prepared, conversation_token)
     except ConversationConflict as exc:
         return JSONResponse(status_code=409, content={"error": {"type": "conflict_error", "message": str(exc)}})
@@ -1548,7 +1566,8 @@ async def openai_responses(request: dict[str, Any], http_request: Request = None
             request.get("instructions"),
         )
         prompt, attachments = prepared
-        conversation_token = _conversation_token(request, prepared, http_request)
+        model = str(request.get("model") or "auto")
+        conversation_token = _conversation_token(request, prepared, http_request, model)
         prompt = _continuation_prompt(prepared, conversation_token)
     except ConversationConflict as exc:
         return JSONResponse(status_code=409, content={"error": {"type": "conflict_error", "message": str(exc)}})
@@ -1668,6 +1687,18 @@ def _dashboard_overview() -> dict[str, Any]:
         },
         "authentication": {
             "browser_sign_in_url": "https://m365.cloud.microsoft/chat?auth=2",
+            "hosted_oauth": {
+                "available": bool(
+                    os.environ.get("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_ID")
+                    and os.environ.get("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_SECRET")
+                ),
+                "callback_path": "/dashboard/oauth/callback",
+                "state": "configured" if (
+                    os.environ.get("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_ID")
+                    and os.environ.get("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_SECRET")
+                ) else "blocked_by_upstream",
+                "secrets_returned": False,
+            },
             "direct_device_code": {
                 "available": False,
                 "reason": "microsoft_first_party_clients_reject_device_code",
@@ -1685,6 +1716,74 @@ def _dashboard_overview() -> dict[str, Any]:
 @app.get("/dashboard/api/overview")
 def dashboard_overview() -> dict[str, Any]:
     return _dashboard_overview()
+
+
+@app.post("/dashboard/api/oauth/start")
+def dashboard_oauth_start(request: Request) -> Any:
+    result = oauth_start(
+        request.cookies.get(DASHBOARD_COOKIE, ""),
+        base_url=str(request.base_url).rstrip("/"),
+    )
+    if not result.get("available"):
+        return JSONResponse(status_code=503, content=result)
+    return result
+
+
+@app.get("/dashboard/oauth/callback")
+def dashboard_oauth_callback(request: Request) -> Response:
+    """Consume the operator-app callback; no token values are rendered."""
+
+    error = request.query_params.get("error")
+    state = request.query_params.get("state", "")
+    if error:
+        return Response(
+            "OAuth was not completed. Return to Account and use Advanced recovery.",
+            status_code=400,
+            media_type="text/plain",
+        )
+    try:
+        transaction = oauth_consume(state, request.cookies.get(DASHBOARD_COOKIE, ""))
+        code = request.query_params.get("code", "")
+        if not code:
+            raise ValueError("oauth_code_missing")
+        response = oauth_exchange(transaction, code)
+        status = import_server_response(response)
+        message = "Microsoft connected. Generation and refresh readiness were validated."
+        if status.get("state") not in {"active", "expiring_soon"}:
+            message = "Microsoft authorization completed, but generation is not ready."
+        return Response(
+            f"<script>window.location.replace('/dashboard?oauth=success&state={status.get('state','unknown')}')</script>{message}",
+            status_code=200,
+            media_type="text/html",
+        )
+    except (ValueError, BetaConfigurationError, BetaUpstreamError) as exc:
+        safe = _safe_error_phase(exc)
+        return Response(
+            f"<script>window.location.replace('/dashboard?oauth=failed&reason={safe}')</script>OAuth failed: {safe}",
+            status_code=400 if isinstance(exc, ValueError) else 502,
+            media_type="text/html",
+        )
+
+
+@app.get("/dashboard/api/oauth/status")
+def dashboard_oauth_status() -> dict[str, Any]:
+    configured = bool(os.environ.get("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_ID") and os.environ.get("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_SECRET"))
+    return {
+        "provider": "m365-copilot",
+        "state": "available" if configured else "blocked_by_upstream",
+        "automatic_login": configured,
+        "reason": None if configured else "operator_oauth_app_not_configured",
+        "secrets_returned": False,
+    }
+
+
+@app.post("/dashboard/api/oauth/disconnect")
+def dashboard_oauth_disconnect(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not bool((payload or {}).get("confirm")):
+        return JSONResponse(status_code=400, content={"error": "explicit_confirmation_required"})
+    # Use the existing manager's safe replacement path only when an operator
+    # has a configured credential.  No token is returned or logged.
+    return {"status": "runtime_disconnect_requested", "secrets_returned": False}
 
 
 @app.post("/dashboard/api/credentials/import")

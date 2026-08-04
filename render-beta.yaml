@@ -22,3 +22,15 @@ services:
         sync: false
       - key: CODEX_AUTH_M365_BETA_CREDENTIAL_KEY
         sync: false
+      - key: CODEX_AUTH_M365_BETA_OAUTH_CLIENT_ID
+        sync: false
+      - key: CODEX_AUTH_M365_BETA_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: CODEX_AUTH_M365_BETA_OAUTH_TENANT
+        value: "common"
+      - key: CODEX_AUTH_M365_BETA_OAUTH_REDIRECT_URI
+        sync: false
+      - key: CODEX_AUTH_M365_BETA_OAUTH_SYDNEY_SCOPE
+        value: "https://substrate.office.com/sydney/v2/.default openid profile offline_access"
+      - key: CODEX_AUTH_M365_BETA_OAUTH_GRAPH_SCOPE
+        value: "https://graph.microsoft.com/.default openid profile offline_access"

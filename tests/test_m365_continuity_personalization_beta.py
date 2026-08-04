@@ -72,6 +72,54 @@ def test_conversation_rolls_over_after_configured_turn_limit(monkeypatch):
     assert local.public_metadata(second)["rollover"] is True
 
 
+def test_model_switch_keeps_proxy_chat_but_forks_upstream_conversation():
+    local = ConversationCoordinator(secret="model-switch", now=lambda: 100)
+    first_hashes = ("user-one", "assistant-one")
+    first = local.acquire(
+        explicit_id="studio-chat",
+        first_user_text="first",
+        request_text="first request",
+        turn_hashes=first_hashes,
+        model_id="gpt-5-5-quick-response",
+    )
+    local.complete(first)
+
+    second = local.acquire(
+        explicit_id="studio-chat",
+        first_user_text="first",
+        request_text="second request",
+        turn_hashes=first_hashes + ("user-two",),
+        model_id="gpt-5-5-think-deeper",
+    )
+
+    assert second["proxy_id"] == first["proxy_id"]
+    assert second["upstream_id"] != first["upstream_id"]
+    assert second["continuity"] == "model_switched"
+    assert local.public_metadata(second)["model_switch"] is True
+
+
+def test_model_case_stability_does_not_fork_upstream():
+    local = ConversationCoordinator(secret="model-stable", now=lambda: 100)
+    first = local.acquire(
+        explicit_id="studio-chat",
+        first_user_text="first",
+        request_text="first request",
+        turn_hashes=("user-one",),
+        model_id="GPT-5-5-QUICK-RESPONSE",
+    )
+    local.complete(first)
+    second = local.acquire(
+        explicit_id="studio-chat",
+        first_user_text="first",
+        request_text="second request",
+        turn_hashes=("user-one", "assistant-one", "user-two"),
+        model_id="gpt-5-5-quick-response",
+    )
+
+    assert second["upstream_id"] == first["upstream_id"]
+    assert second["continuity"] == "continued"
+
+
 def test_responses_endpoint_emits_reasoning_and_text(monkeypatch):
     async def provider_events(prompt, model, attachments=None):
         yield {"type": "reasoning_summary_delta", "delta": "Checking"}

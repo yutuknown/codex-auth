@@ -34,6 +34,8 @@ def test_dashboard_shell_exposes_account_models_capabilities_and_logs_without_se
     assert page.count('class="provider-subtitle"') == 1
     assert "codex-auth-beta-sidebar-v2" in page
     assert "No runtime events yet" in page
+    assert ".nav button.active{background:#1f1f1f;color:#fff" in page
+    assert "Continue with Microsoft" in page
     assert "side:before" not in page
     assert "top:after" not in page
     assert "Connect Microsoft 365" in page
@@ -103,3 +105,31 @@ def test_dashboard_credential_import_returns_only_safe_lifecycle(monkeypatch):
     assert response.status_code == 200
     assert response.json()["secrets_returned"] is False
     assert "sensitive" not in response.text
+
+
+def test_hosted_oauth_start_is_pkce_and_never_returns_secrets(monkeypatch):
+    monkeypatch.setenv(compat.ADMIN_KEY_ENV, "operator-key")
+    monkeypatch.setenv("CODEX_AUTH_M365_BETA_DASHBOARD_SESSION_KEY", "session-key")
+    monkeypatch.setenv("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_ID", "public-client")
+    monkeypatch.setenv("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_SECRET", "server-secret")
+
+    async def call():
+        transport = httpx.ASGITransport(app=compat.app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://beta.test") as client:
+            await client.post("/dashboard/login", json={"admin_key": "operator-key"})
+            return await client.post("/dashboard/api/oauth/start")
+
+    response = asyncio.run(call())
+    body = response.json()
+    assert response.status_code == 200
+    assert body["available"] is True
+    assert "state=" in body["authorization_url"]
+    assert "code_challenge=" in body["authorization_url"]
+    assert "server-secret" not in response.text
+    assert "access_token" not in response.text
+
+
+def test_hosted_oauth_is_explicitly_blocked_without_operator_app(monkeypatch):
+    monkeypatch.delenv("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CODEX_AUTH_M365_BETA_OAUTH_CLIENT_SECRET", raising=False)
+    assert compat.dashboard_oauth_status()["automatic_login"] is False

@@ -182,12 +182,16 @@ selected from a local file and is cleared from the page immediately after the
 request.
 
 Microsoft's first-party M365 browser clients do not permit device-code login,
-and their registered authorization callback belongs to
-`m365.cloud.microsoft`. Consequently, a third-party Render dashboard cannot
-receive that browser response directly. The dashboard opens Microsoft 365 for
-sign-in and then accepts the successful OAuth response JSON; it does not claim
-to intercept Microsoft browser traffic. Route and refresh metadata are derived
-and preserved by the beta after import.
+and their registered callback belongs to `m365.cloud.microsoft`. The beta now
+also supports a conditional hosted OAuth gate using an operator-owned Entra
+web application. Configure `CODEX_AUTH_M365_BETA_OAUTH_CLIENT_ID`,
+`CODEX_AUTH_M365_BETA_OAUTH_CLIENT_SECRET`, and the exact Render callback
+`https://codex-auth-beta.onrender.com/dashboard/oauth/callback`. The Account
+view enables `Continue with Microsoft` only when that app is configured; the
+code exchange, Sydney-scope validation, encrypted import, and zero-cookie
+probe must all pass before it is considered ready. If Microsoft blocks the
+private Sydney scope for the app, Advanced recovery keeps the existing JSON
+import path available.
 
 Check only safe readiness state with:
 

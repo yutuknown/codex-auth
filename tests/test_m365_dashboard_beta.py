@@ -37,6 +37,7 @@ def test_dashboard_shell_exposes_account_models_capabilities_and_logs_without_se
     assert "side:before" not in page
     assert "top:after" not in page
     assert "Connect Microsoft 365" in page
+    assert "Paste OAuth JSON" in page
     assert "Available Models" in page
     assert "Capability Evidence" in page
     assert "Commit-bound verification" in page

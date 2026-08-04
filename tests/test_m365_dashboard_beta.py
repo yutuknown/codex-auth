@@ -25,6 +25,12 @@ def test_dashboard_session_is_signed_short_lived_and_contains_no_admin_key(monke
 def test_dashboard_shell_exposes_account_models_capabilities_and_logs_without_secrets():
     page = dashboard_html()
 
+    assert "/assets/logo-dark.svg" in page
+    assert "themeToggle" in page
+    assert "sidebarToggle" in page
+    assert "Codex /" in page
+    assert page.count('class="nav-text"') == 6
+    assert page.count('class="view') == 6
     assert "Connect Microsoft 365" in page
     assert "Available models" in page
     assert "Capability evidence" in page
@@ -91,4 +97,3 @@ def test_dashboard_credential_import_returns_only_safe_lifecycle(monkeypatch):
     assert response.status_code == 200
     assert response.json()["secrets_returned"] is False
     assert "sensitive" not in response.text
-

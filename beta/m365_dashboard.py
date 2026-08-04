@@ -60,7 +60,7 @@ def dashboard_request_authorized(request: Request) -> bool:
     return dashboard_session_valid(request.cookies.get(DASHBOARD_COOKIE, ""))
 
 
-def dashboard_html() -> str:
+def dashboard_html_legacy() -> str:
     """Return the self-contained dashboard shell; all data loads after login."""
 
     return r"""<!doctype html>
@@ -107,3 +107,45 @@ $('probe').onclick=async()=>{$('actionStatus').textContent='Running zero-cookie 
 fetch('/dashboard/api/overview').then(r=>{if(r.ok)return load();showLogin()}).catch(showLogin);
 </script></body></html>"""
 
+
+def dashboard_html() -> str:
+    """Return the beta dashboard with the production console shell applied.
+
+    The legacy shell is retained as the content source so this layout-only
+    adaptation cannot accidentally change the beta API or credential flows.
+    """
+
+    html = dashboard_html_legacy()
+    production_css = r"""
+/* Production console skin: layout only; beta data and actions remain intact. */
+:root{--prod-bg:#000;--prod-surface:#0a0a0a;--prod-hover:#171717;--prod-line:#27272a;--prod-strong:#3f3f46;--prod-text:#fff;--prod-muted:#a1a1aa;--prod-green:#10b981;--prod-blue:#3b82f6;--prod-sidebar:rgba(5,5,5,.86);--prod-blur:rgba(10,10,10,.82);--prod-width:240px}
+:root.theme-light{color-scheme:light;--prod-bg:#fafafa;--prod-surface:#fff;--prod-hover:#f4f4f5;--prod-line:#e4e4e7;--prod-strong:#d4d4d8;--prod-text:#18181b;--prod-muted:#52525b;--prod-sidebar:rgba(255,255,255,.86);--prod-blur:rgba(255,255,255,.82)}
+body{background:var(--prod-bg);background-image:radial-gradient(circle at center,rgba(127,127,127,.12) 1px,transparent 1px);background-size:24px 24px;color:var(--prod-text);min-height:100vh}
+.login-card,.card{background:var(--prod-surface);border-color:var(--prod-strong);border-radius:12px}.login-card{box-shadow:0 28px 80px #0008}.brand-img{display:block;height:40px;width:auto;min-width:134px;content:url('/assets/logo-dark.svg')}.theme-light .brand-img{content:url('/assets/logo.svg')}
+.app{grid-template-columns:var(--prod-width) minmax(0,1fr);transition:grid-template-columns .25s ease}.app.collapsed{--prod-width:72px}.side{padding:0;background:var(--prod-sidebar);border-right:1px solid var(--prod-line);backdrop-filter:blur(20px);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}.side>.brand{height:80px;padding:20px 24px;border-bottom:1px solid var(--prod-line);width:100%;display:flex;align-items:center}.app.collapsed .side>.brand{width:72px;padding-left:18px;overflow:hidden}.side:before{content:'M365 bearer beta';order:2;color:var(--prod-muted);font-size:12px;padding:15px 24px 0}.nav{order:3;margin-top:10px;padding:0 12px;gap:6px}.nav button{border:0;background:transparent;color:var(--prod-muted);padding:10px 14px;border-radius:8px;display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;text-align:left}.nav button:hover{background:rgba(127,127,127,.08);color:var(--prod-text)}.nav button.active{background:#1f1f1f;color:var(--prod-text);font-weight:600}.nav button svg{width:18px;height:18px;flex:0 0 18px}.app.collapsed .nav button{justify-content:center;padding:10px}.app.collapsed .nav button{font-size:0}.app.collapsed .nav button svg{margin:0}.side-bottom{order:4;position:static;margin-top:auto;padding:16px 12px}.app.collapsed .side-bottom .btn{font-size:0;padding:10px}.app.collapsed .side-bottom .btn:after{content:'↪';font-size:16px}
+.main{padding:0;max-width:none;min-width:0;overflow:hidden}.top{height:72px;margin:0;padding:0 32px;border-bottom:1px solid var(--prod-line);background:var(--prod-blur);backdrop-filter:blur(10px);border-radius:0}.top:before{content:'Codex / ';color:var(--prod-muted);font-size:14px;margin-right:-24px}.title{font-size:14px;font-weight:500}.top>div:first-child{display:flex;align-items:baseline;gap:0}.top>div:first-child .muted{position:absolute;margin-top:25px;font-size:11px}.top .badge{margin-left:auto}.top:after{content:'☼';color:var(--prod-muted);font-size:20px;margin-left:18px;cursor:pointer}.view-container{padding:40px;overflow-y:auto;overflow-x:hidden;flex:1}.view{max-width:1500px;margin:0 auto}.view.active{display:block}.view>h1,.view>p{margin-left:0}
+.header{margin-bottom:32px}.header h1{font-size:24px;font-weight:600;letter-spacing:-.03em}.header p{color:var(--prod-muted)}.grid{gap:16px}.card{padding:24px;transition:border-color .2s}.card:hover{border-color:var(--prod-muted)}.metric{font-size:31px;font-weight:600;letter-spacing:-.03em}.label{font-weight:500;color:var(--prod-muted)}.section{margin-top:0}.two,.split{gap:16px}.section-head{margin-bottom:16px}.section h2{font-size:18px;font-weight:600}.kv{margin-top:16px}.btn{border-radius:7px;background:var(--prod-surface);border-color:var(--prod-strong);padding:9px 13px}.btn:hover{background:var(--prod-hover);border-color:var(--prod-muted)}.btn.primary{background:var(--prod-text);color:var(--prod-bg);border-color:var(--prod-text)}.notice{border-radius:6px}.logs{height:420px;border-color:var(--prod-strong);border-radius:8px;background:var(--code)}table th{font-weight:500;padding:14px 16px;border-color:var(--prod-strong)}table td{padding:14px 16px;border-color:var(--prod-line)}table tr:hover td{background:var(--prod-hover)}
+@media(max-width:1100px){.col-4{grid-column:span 6}}@media(max-width:800px){.col-4,.col-6,.col-8{grid-column:span 12}.two,.split{grid-template-columns:1fr}}@media(max-width:720px){.app{grid-template-columns:1fr}.side{height:auto;position:static;border-right:0;border-bottom:1px solid var(--prod-line)}.side>.brand{height:68px}.nav{grid-template-columns:repeat(3,1fr);padding:12px 10px;margin-top:0}.nav button{justify-content:center;padding:9px 5px;font-size:12px}.nav button svg{width:16px;height:16px}.side:before{display:none}.side-bottom{padding:0 10px 12px}.top{height:60px;padding:0 16px}.top:before{display:none}.top .badge{display:none}.view-container{padding:24px 16px}.grid{grid-template-columns:1fr 1fr}.card{padding:18px}}
+"""
+    html = html.replace('</style>', production_css + '</style>', 1)
+    html = html.replace('<div class="brand">codex<span>-auth</span></div>', '<div class="brand"><img class="brand-img" src="/assets/logo-dark.svg" alt="Codex Auth"></div>')
+    html = html.replace('<div class="brand">codex<span>-auth</span></div>', '<div class="brand"><img class="brand-img" src="/assets/logo-dark.svg" alt="Codex Auth"></div>')
+    icons = {
+        'Overview': '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
+        'Account': '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+        'Models': '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 10 5-10 5L2 7l10-5Z"/><path d="m2 12 10 5 10-5M2 17l10 5 10-5"/></svg>',
+        'Capabilities': '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 4 7v5c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>',
+        'Verification': '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>',
+        'Live logs': '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="2"/></svg>',
+    }
+    for label, icon in icons.items():
+        html = html.replace(f'>{label}</button>', f'>{icon}<span class="nav-text">{label}</span></button>')
+    html = html.replace('<main class="main"><header class="top">', '<main class="main"><header class="top"><button id="sidebarToggle" class="sidebar-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>')
+    html = html.replace('<div id="pageTitle" class="title">', '<div class="breadcrumbs"><span id="pageTitle" class="title">', 1)
+    html = html.replace('</div><div id="build" class="muted"></div></div><div id="connectionBadge"', '</span></div><div id="build" class="muted"></div></div><div id="connectionBadge"', 1)
+    html = html.replace('</div></header>', '</div><button id="themeToggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme">☼</button></div></header>', 1)
+    script = """
+const theme=localStorage.getItem('codex-auth-beta-theme');if(theme==='light')document.documentElement.classList.add('theme-light');$('themeToggle').onclick=()=>{document.documentElement.classList.toggle('theme-light');localStorage.setItem('codex-auth-beta-theme',document.documentElement.classList.contains('theme-light')?'light':'dark')};$('sidebarToggle').onclick=()=>{$('app').classList.toggle('collapsed');localStorage.setItem('codex-auth-beta-sidebar',$('app').classList.contains('collapsed')?'collapsed':'expanded')};if(localStorage.getItem('codex-auth-beta-sidebar')==='collapsed')$('app').classList.add('collapsed');
+"""
+    html = html.replace('</script></body></html>', script + '</script></body></html>')
+    return html

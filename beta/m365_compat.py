@@ -27,6 +27,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from beta.m365_artifacts import artifact_store
 from beta.m365_bearer import (
@@ -928,6 +929,9 @@ def _collect_content(events: Iterable[dict[str, Any]]) -> tuple[str, str]:
 
 
 app = FastAPI(title="M365 bearer beta compatibility API")
+_beta_assets = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets"))
+if os.path.isdir(_beta_assets):
+    app.mount("/assets", StaticFiles(directory=_beta_assets), name="beta-assets")
 
 
 @app.middleware("http")

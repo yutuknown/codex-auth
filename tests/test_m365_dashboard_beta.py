@@ -30,12 +30,17 @@ def test_dashboard_shell_exposes_account_models_capabilities_and_logs_without_se
     assert "sidebarToggle" in page
     assert "Codex /" in page
     assert page.count('class="nav-text"') == 6
-    assert page.count('class="view') == 6
+    assert all(f'id="{view}" class="view' in page for view in ("overview", "account", "models", "capabilities", "verification", "logs"))
+    assert page.count('class="provider-subtitle"') == 1
+    assert "codex-auth-beta-sidebar-v2" in page
+    assert "No runtime events yet" in page
+    assert "side:before" not in page
+    assert "top:after" not in page
     assert "Connect Microsoft 365" in page
-    assert "Available models" in page
-    assert "Capability evidence" in page
+    assert "Available Models" in page
+    assert "Capability Evidence" in page
     assert "Commit-bound verification" in page
-    assert "Redacted runtime events" in page
+    assert "Network Inspector" in page
     assert "access_token" not in page
     assert "refresh_token" not in page
 

@@ -712,7 +712,9 @@ class M365BearerBeta:
                     # decryption failure must never fall back to environment JSON.
                     if isinstance(exc, BetaConfigurationError):
                         raise
-                    raise DurabilityRequiredError("durability_unavailable") from exc
+                    raise DurabilityRequiredError(
+                        f"durability_unavailable:{type(exc).__name__}"
+                    ) from exc
                 if raw is None:
                     try:
                         raw, _ = _environment_credential()
@@ -722,7 +724,9 @@ class M365BearerBeta:
                             if required():
                                 raise DurabilityRequiredError("durable_credential_bootstrap_required") from exc
                             raise
-                        raise DurabilityRequiredError("durability_unavailable") from exc
+                        raise DurabilityRequiredError(
+                            f"durability_unavailable:{type(exc).__name__}"
+                        ) from exc
 
                 def durable_writer(value: dict[str, Any]) -> None:
                     nonlocal version
@@ -822,7 +826,9 @@ class M365BearerBeta:
         except DurabilityRequiredError:
             raise
         except Exception as exc:
-            raise DurabilityRequiredError("durability_unavailable") from exc
+            raise DurabilityRequiredError(
+                f"durability_unavailable:{type(exc).__name__}"
+            ) from exc
         return cls.from_directory(session_factory=session_factory)
 
     def _persist_credential(self, value: dict[str, Any]) -> None:

@@ -69,6 +69,27 @@ class Campaign:
             item["phase"] = "sse_" + "_".join(sorted(event_types)[:4])
         self.checks.append(item)
 
+    def _record_values(
+        self,
+        identifier: str,
+        status: int,
+        latency_ms: int,
+        size: int,
+        outcome: str,
+        *,
+        phase: str | None = None,
+    ) -> None:
+        item: dict[str, Any] = {
+            "id": identifier,
+            "outcome": outcome,
+            "http_status": status,
+            "latency_ms": latency_ms,
+            "bytes": size,
+        }
+        if phase:
+            item["phase"] = phase
+        self.checks.append(item)
+
     def check(self, identifier: str, response: httpx.Response, allowed: set[int]) -> None:
         self._record(identifier, response, "passed" if response.status_code in allowed else "failed")
 
@@ -126,13 +147,39 @@ class Campaign:
             "passed" if self.commit != "unknown" and self.contract == EXPECTED_CONTRACT else "failed",
             phase="commit_bound" if self.contract == EXPECTED_CONTRACT else "contract_mismatch",
         )
+        models_response: httpx.Response | None = None
         for path, identifier in [
             ("/v1/deployment-readiness", "deployment_readiness"),
             ("/v1/models", "models"), ("/v1/capabilities", "capabilities"),
             ("/v1/research", "research"), ("/v1/verification", "verification"),
             ("/v1/metrics", "metrics"), ("/v1/logs", "logs"),
         ]:
-            self.check(identifier, client.get(path, headers=self.api_headers), {200})
+            response = client.get(path, headers=self.api_headers)
+            self.check(identifier, response, {200})
+            if identifier == "models":
+                models_response = response
+        catalog = self._safe_json(models_response) if models_response is not None else {}
+        entries = catalog.get("data") if isinstance(catalog.get("data"), list) else []
+        model_id = next((str(item.get("id")) for item in entries if isinstance(item, dict) and isinstance(item.get("id"), str)), "")
+        if model_id:
+            self.check("known_model", client.get(f"/v1/models/{model_id}", headers=self.api_headers), {200})
+        else:
+            self._record("known_model", None, "failed", phase="catalog_has_no_public_model")
+        started = time.monotonic()
+        try:
+            with client.stream("GET", "/v1/logs/stream", headers=self.api_headers, timeout=10) as stream:
+                first = next(stream.iter_bytes())
+                observed = b"event: heartbeat" in first or b"event: telemetry" in first
+                self._record_values(
+                    "logs_stream",
+                    stream.status_code,
+                    int((time.monotonic() - started) * 1000),
+                    len(first),
+                    "passed" if stream.status_code == 200 and observed else "failed",
+                    phase="sse_heartbeat" if observed else "sse_missing_event",
+                )
+        except (httpx.HTTPError, StopIteration):
+            self._record("logs_stream", None, "failed", phase="sse_connection_failed")
         self.intentional("unknown_model", client.get("/v1/models/not-a-model", headers=self.api_headers), 404)
         self.intentional("count_tokens", client.post("/v1/messages/count_tokens", headers=self.api_headers, json={}), 501)
         self.intentional("invalid_api_key", client.get("/v1/models", headers={"x-api-key": "invalid"}), 401)

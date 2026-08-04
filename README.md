@@ -287,13 +287,20 @@ The beta never loads cookies and must not be treated as production-ready unless
 the probe completes successfully with zero cookies.
 
 For a hosted beta, seed credentials with
-`CODEX_AUTH_M365_BETA_AUTH_JSON`. Refresh rotation stays only in process memory
-unless `CODEX_AUTH_M365_BETA_STATE_FILE` points to mounted persistent storage.
-The readiness endpoint intentionally reports `ready: false` when rotation is
-not restart-durable. Do not place either value in source control or dashboard
-markup. Historical OpenAI tool messages and Anthropic `tool_result` blocks are
-preserved as labelled conversation context; caller-defined tool invocation is
-still rejected before any upstream prompt is submitted.
+`CODEX_AUTH_M365_BETA_AUTH_JSON`. To make a single M365 credential durable
+across Render restarts, configure both
+`CODEX_AUTH_M365_BETA_DATABASE_URL` and
+`CODEX_AUTH_M365_BETA_CREDENTIAL_KEY`; the beta then stores only an AES-GCM
+encrypted record in external Postgres. Without both values, rotation is process
+memory only and `/v1/deployment-readiness` intentionally reports `ready: false`.
+Run `python -m beta.m365_hosted_campaign --base-url <beta-url> --proof-dir
+<ignored-proof-dir> --store` only with local API/admin keys in the process
+environment; its manifest records structural evidence only and refuses to call
+credential-dependent routes after its single refresh gate fails. Do not place
+credentials, proof bundles, or dashboard imports in source control. Historical
+OpenAI tool messages and Anthropic `tool_result` blocks are preserved as labelled
+conversation context; caller-defined tool invocation is still rejected before
+any upstream prompt is submitted.
 
 ## ☁️ Deploy on Render
 

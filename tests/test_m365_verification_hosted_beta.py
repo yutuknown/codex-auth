@@ -27,6 +27,17 @@ def test_verification_manifest_is_canonical_and_rejects_secrets():
         canonical_manifest({"tested_commit": "abc123", "checks": [{"id": "x", "outcome": "passed", "url": "secret"}]})
 
 
+def test_verification_manifest_records_auth_blocks_without_sensitive_detail():
+    manifest, _ = canonical_manifest(
+        {
+            "tested_commit": "abc123",
+            "checks": [{"id": "refresh_gate", "outcome": "blocked_by_auth", "phase": "single_refresh_rejected"}],
+        }
+    )
+
+    assert manifest["checks"] == [{"id": "refresh_gate", "outcome": "blocked_by_auth", "phase": "single_refresh_rejected"}]
+
+
 def test_capabilities_start_unverified_and_pin_antigravity_commit(monkeypatch):
     monkeypatch.delenv("CODEX_AUTH_M365_BETA_DATABASE_URL", raising=False)
     report = equivalence_report()

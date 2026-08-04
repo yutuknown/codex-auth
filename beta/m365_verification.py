@@ -52,7 +52,7 @@ def canonical_manifest(manifest: dict[str, Any]) -> tuple[dict[str, Any], str]:
         name = str(item.get("id") or "")
         outcome = str(item.get("outcome") or "")
         if not _SAFE_VALUE.fullmatch(name) or outcome not in {
-            "passed", "failed", "intentional", "blocked_by_upstream", "mock_only",
+            "passed", "failed", "intentional", "blocked_by_auth", "blocked_by_upstream", "mock_only",
         }:
             raise ValueError("verification check is invalid")
         safe: dict[str, Any] = {"id": name, "outcome": outcome}

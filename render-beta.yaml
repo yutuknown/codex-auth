@@ -16,6 +16,8 @@ services:
         generateValue: true
       - key: CODEX_AUTH_M365_BETA_CONVERSATION_HMAC_KEY
         generateValue: true
+      - key: CODEX_AUTH_M365_BETA_DASHBOARD_SESSION_KEY
+        generateValue: true
       - key: CODEX_AUTH_M365_BETA_DATABASE_URL
         sync: false
       - key: CODEX_AUTH_M365_BETA_CREDENTIAL_KEY

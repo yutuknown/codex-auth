@@ -171,6 +171,24 @@ local `beta/ms365-auth.json` from the redacted example. The beta derives the
 SignalR identity and OAuth renewal metadata from that OAuth response and never
 reads `.codex`, browser cookies, or production credentials. An optional `route`
 override can be embedded in the same JSON if Microsoft changes its claims.
+
+The hosted beta dashboard is available at `/dashboard` (and the former
+`/admin/credentials` URL remains an alias). Sign in with the beta admin key;
+the browser receives a short-lived signed HttpOnly session, never the raw key.
+The dashboard exposes connection health, credential import/refresh, a
+zero-cookie marker probe, models, capability evidence, commit-bound
+verification, metrics, and redacted live logs. Credential JSON may be pasted or
+selected from a local file and is cleared from the page immediately after the
+request.
+
+Microsoft's first-party M365 browser clients do not permit device-code login,
+and their registered authorization callback belongs to
+`m365.cloud.microsoft`. Consequently, a third-party Render dashboard cannot
+receive that browser response directly. The dashboard opens Microsoft 365 for
+sign-in and then accepts the successful OAuth response JSON; it does not claim
+to intercept Microsoft browser traffic. Route and refresh metadata are derived
+and preserved by the beta after import.
+
 Check only safe readiness state with:
 
 ```bash

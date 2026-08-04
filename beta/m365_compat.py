@@ -36,6 +36,13 @@ from beta.m365_bearer import (
     M365BearerBeta,
 )
 from beta.m365_conversations import ConversationConflict, coordinator
+from beta.m365_dashboard import (
+    DASHBOARD_COOKIE,
+    DASHBOARD_SESSION_TTL,
+    dashboard_html,
+    dashboard_request_authorized,
+    issue_dashboard_session,
+)
 from beta.m365_equivalence import equivalence_report
 from beta.m365_events import public_event
 from beta.m365_files import GraphCredential, M365GraphUploader
@@ -926,6 +933,9 @@ app = FastAPI(title="M365 bearer beta compatibility API")
 @app.middleware("http")
 async def optional_api_key_guard(request: Request, call_next: Any) -> Any:
     path = request.url.path
+    dashboard_protected = path.startswith("/dashboard/api/") or path == "/dashboard/logout"
+    if dashboard_protected and not dashboard_request_authorized(request):
+        return JSONResponse(status_code=401, content={"error": "dashboard_session_required"})
     expected = os.environ.get(API_KEY_ENV)
     if expected and path.startswith("/v1/"):
         authorization = request.headers.get("authorization", "")
@@ -947,13 +957,15 @@ async def optional_api_key_guard(request: Request, call_next: Any) -> Any:
         (path.startswith("/admin/") and request.method != "GET")
         or path == "/refresh-token"
     )
-    if is_admin_mutation:
+    is_dashboard_mutation = path.startswith("/dashboard/api/") and request.method != "GET"
+    if is_admin_mutation or is_dashboard_mutation:
         expected_admin = os.environ.get(ADMIN_KEY_ENV) or os.environ.get(API_KEY_ENV)
-        supplied_admin = request.headers.get("x-admin-key", "")
         if not expected_admin:
             return JSONResponse(status_code=503, content={"error": "credential administration is not configured"})
-        if not secrets.compare_digest(supplied_admin, expected_admin):
-            return JSONResponse(status_code=401, content={"error": "invalid admin key"})
+        if is_admin_mutation:
+            supplied_admin = request.headers.get("x-admin-key", "")
+            if not secrets.compare_digest(supplied_admin, expected_admin):
+                return JSONResponse(status_code=401, content={"error": "invalid admin key"})
         content_length = request.headers.get("content-length")
         if content_length:
             try:
@@ -1095,6 +1107,7 @@ def root() -> dict[str, Any]:
         "provider": "m365-copilot",
         "scope": "local beta",
         "endpoints": [
+            "/dashboard",
             "/health",
             "/account-limits",
             "/refresh-token",
@@ -1114,16 +1127,9 @@ def root() -> dict[str, Any]:
 
 @app.get("/admin/credentials", response_class=HTMLResponse)
 def credential_admin_page() -> str:
-    """Small no-storage reauthorization page; submitted text is cleared client-side."""
+    """Keep the former credential URL as an alias for the beta dashboard."""
 
-    return """<!doctype html><html><head><meta charset='utf-8'><title>M365 credentials</title>
-<style>body{font:16px system-ui;max-width:760px;margin:3rem auto;padding:0 1rem}textarea,input{width:100%;box-sizing:border-box;margin:.5rem 0;padding:.75rem}textarea{min-height:260px}button{padding:.7rem 1rem}pre{white-space:pre-wrap}</style></head>
-<body><h1>M365 generation credentials</h1><p>Paste a newly acquired OAuth JSON response. With encrypted Postgres configured, replacement credentials survive restarts.</p>
-<input id='key' type='password' autocomplete='off' placeholder='Admin key'><textarea id='credential' spellcheck='false' placeholder='OAuth JSON'></textarea>
-<button id='submit'>Import / Replace</button><pre id='status'></pre><script>
-const box=document.getElementById('credential'),status=document.getElementById('status');
-document.getElementById('submit').onclick=async()=>{status.textContent='Importing…';try{const value=JSON.parse(box.value);const response=await fetch('/admin/credentials/import',{method:'POST',headers:{'content-type':'application/json','x-admin-key':document.getElementById('key').value},body:JSON.stringify({credential:value})});status.textContent=JSON.stringify(await response.json(),null,2)}catch(error){status.textContent='Import failed: '+error.message}finally{box.value='';document.getElementById('key').value=''}};
-</script></body></html>"""
+    return dashboard_html()
 
 
 @app.post("/admin/credentials/import")
@@ -1585,3 +1591,169 @@ async def openai_responses(request: dict[str, Any], http_request: Request = None
         "usage": {"input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"], "total_tokens": usage["total_tokens"]},
         "provider_metadata": {"m365": {**prepared.safe_status(), "conversation": coordinator.public_metadata(conversation_token), "reasoning": _reasoning_contract()}},
     }
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard() -> str:
+    """Render the operator dashboard shell without embedding runtime data."""
+
+    return dashboard_html()
+
+
+@app.post("/dashboard/login")
+async def dashboard_login(request: Request) -> Any:
+    if len(await request.body()) > 4_096:
+        return JSONResponse(status_code=413, content={"error": "login_request_too_large"})
+    try:
+        payload = await request.json()
+    except (TypeError, ValueError):
+        payload = {}
+    expected = os.environ.get(ADMIN_KEY_ENV) or os.environ.get(API_KEY_ENV) or ""
+    supplied = str(payload.get("admin_key") or "") if isinstance(payload, dict) else ""
+    if not expected or not secrets.compare_digest(supplied, expected):
+        return JSONResponse(status_code=401, content={"error": "invalid_admin_key"})
+    response = JSONResponse({"status": "ok", "session_expires_in_seconds": DASHBOARD_SESSION_TTL})
+    response.set_cookie(
+        DASHBOARD_COOKIE,
+        issue_dashboard_session(),
+        max_age=DASHBOARD_SESSION_TTL,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/dashboard/logout")
+def dashboard_logout() -> JSONResponse:
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie(DASHBOARD_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+    return response
+
+
+def _dashboard_overview() -> dict[str, Any]:
+    try:
+        credential = M365BearerBeta.from_directory().status()
+    except BetaConfigurationError:
+        credential = {
+            "state": "not_configured",
+            "cookie_count": 0,
+            "generation_ready": False,
+            "refresh_ready": False,
+            "credential_persistence": {
+                "source": "unconfigured",
+                "restart_durable": False,
+            },
+        }
+    try:
+        catalog = M365ModelCatalog.from_directory().api_list()
+    except BetaConfigurationError:
+        catalog = {"object": "list", "data": [], "source": "unconfigured"}
+    return {
+        "provider": "m365-copilot",
+        "credential": credential,
+        "readiness": deployment_readiness(),
+        "models": catalog,
+        "capabilities": equivalence_report(),
+        "verification": verification(),
+        "metrics": telemetry.summary(),
+        "build": {
+            "render_commit": running_commit(),
+            "verification_contract": VERIFICATION_CONTRACT_VERSION,
+        },
+        "authentication": {
+            "browser_sign_in_url": "https://m365.cloud.microsoft/chat?auth=2",
+            "direct_device_code": {
+                "available": False,
+                "reason": "microsoft_first_party_clients_reject_device_code",
+            },
+            "oauth_json_import": {
+                "available": True,
+                "required_fields": [
+                    "token_type", "access_token", "refresh_token", "expires_in", "scope", "id_token",
+                ],
+            },
+        },
+    }
+
+
+@app.get("/dashboard/api/overview")
+def dashboard_overview() -> dict[str, Any]:
+    return _dashboard_overview()
+
+
+@app.post("/dashboard/api/credentials/import")
+def dashboard_import_credentials(payload: dict[str, Any]) -> Any:
+    try:
+        value = payload.get("credential")
+        if not isinstance(value, dict):
+            raise BetaConfigurationError("credential must be a JSON object")
+        status = M365BearerBeta.from_directory().replace_credential(value)
+        return {
+            "status": "ok",
+            "provider": "m365-copilot",
+            "credential": status,
+            "secrets_returned": False,
+        }
+    except BetaConfigurationError as exc:
+        return JSONResponse(status_code=400, content={"status": "error", "error": str(exc)})
+    except BetaUpstreamError as exc:
+        return JSONResponse(status_code=502, content={"status": "error", "error": _safe_error_phase(exc)})
+
+
+@app.post("/dashboard/api/refresh")
+def dashboard_refresh() -> Any:
+    try:
+        return {
+            "status": "ok",
+            "provider": "m365-copilot",
+            "credential": M365BearerBeta.from_directory().refresh(),
+        }
+    except BetaConfigurationError as exc:
+        return JSONResponse(status_code=409, content={"status": "error", "error": str(exc)})
+    except BetaUpstreamError as exc:
+        return JSONResponse(status_code=502, content={"status": "error", "error": _safe_error_phase(exc)})
+
+
+@app.post("/dashboard/api/probe")
+async def dashboard_probe() -> Any:
+    """Run one harmless marker request and return structural proof only."""
+
+    marker = "M365_DASHBOARD_PROBE_42"
+    started = time.monotonic()
+    event_types: set[str] = set()
+    output_fragments: list[str] = []
+    try:
+        async for event in _provider_events(f"Reply exactly {marker}", "auto"):
+            event_type = str(event.get("type") or "")
+            if event_type:
+                event_types.add(event_type[:64])
+            if event_type == "text_delta" and isinstance(event.get("delta"), str):
+                output_fragments.append(event["delta"])
+        marker_observed = marker in "".join(output_fragments)
+        return {
+            "state": "passed" if marker_observed else "failed",
+            "cookie_count": 0,
+            "marker_observed": marker_observed,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "event_types": sorted(event_types),
+            "response_text_returned": False,
+        }
+    except (BetaConfigurationError, BetaUpstreamError) as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "state": "failed",
+                "phase": _safe_error_phase(exc),
+                "cookie_count": 0,
+                "response_text_returned": False,
+            },
+        )
+    finally:
+        output_fragments.clear()
+
+
+@app.get("/dashboard/api/logs/stream")
+def dashboard_logs_stream() -> StreamingResponse:
+    return logs_stream()

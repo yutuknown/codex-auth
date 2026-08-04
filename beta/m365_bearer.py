@@ -74,6 +74,10 @@ class BetaConfigurationError(ValueError):
     """The local beta files are missing required non-secret protocol metadata."""
 
 
+class DurabilityRequiredError(BetaConfigurationError):
+    """Hosted beta cannot use ephemeral credentials when durability is required."""
+
+
 class BetaUpstreamError(RuntimeError):
     """Safe phase-only failure from the experimental upstream transport."""
 
@@ -632,6 +636,7 @@ class M365BearerBeta:
         credential_writer: Callable[[dict[str, Any]], None] | None = None,
         credential_backup: Callable[[str], None] | None = None,
         persistence_status: dict[str, Any] | None = None,
+        durable_store: Any | None = None,
     ) -> None:
         self.credential = credential
         self.route = route
@@ -639,6 +644,8 @@ class M365BearerBeta:
         self.session_factory = session_factory
         self._credential_writer = credential_writer
         self._credential_backup = credential_backup
+        self._durable_store = durable_store
+        self._active_durable_transaction: tuple[Any, int | None] | None = None
         self.persistence_status = persistence_status or {
             "source": "file",
             "rotation_persistence": "host_filesystem",
@@ -678,20 +685,44 @@ class M365BearerBeta:
     @classmethod
     def from_directory(cls, directory: Path | None = None, *, session_factory: Callable[[], Any] | None = None) -> "M365BearerBeta":
         writer: Callable[[dict[str, Any]], None] | None = None
+        durable_store: Any | None = None
         if directory is None:
             # Hosted mode uses one encrypted external record.  The configured
             # environment JSON is only a bootstrap when the record is empty.
             try:
-                from beta.m365_durable import PostgresCredentialStore, configured
+                from beta.m365_durable import PostgresCredentialStore, configured, required
             except ImportError:  # pragma: no cover - package dependency failure
                 def configured() -> bool:
                     return False
+                def required() -> bool:
+                    return False
+                PostgresCredentialStore = None  # type: ignore[assignment,misc]
+            if required() and not configured():
+                raise DurabilityRequiredError(
+                    "durable_credential_store_required: configure "
+                    "CODEX_AUTH_M365_BETA_DATABASE_URL and "
+                    "CODEX_AUTH_M365_BETA_CREDENTIAL_KEY"
+                )
             if configured():
-                store = PostgresCredentialStore()
-                raw, version = store.load()
+                try:
+                    store = PostgresCredentialStore()
+                    raw, version = store.load()
+                except Exception as exc:
+                    # Once hosted durability is required, a database outage or
+                    # decryption failure must never fall back to environment JSON.
+                    if isinstance(exc, BetaConfigurationError):
+                        raise
+                    raise DurabilityRequiredError("durability_unavailable") from exc
                 if raw is None:
-                    raw, _ = _environment_credential()
-                    version = store.save(raw)
+                    try:
+                        raw, _ = _environment_credential()
+                        version = store.save(raw)
+                    except Exception as exc:
+                        if isinstance(exc, BetaConfigurationError):
+                            if required():
+                                raise DurabilityRequiredError("durable_credential_bootstrap_required") from exc
+                            raise
+                        raise DurabilityRequiredError("durability_unavailable") from exc
 
                 def durable_writer(value: dict[str, Any]) -> None:
                     nonlocal version
@@ -701,7 +732,8 @@ class M365BearerBeta:
                 def durable_backup(reason: str) -> None:
                     store.backup_current(reason)
                 credential_path = default_beta_directory() / "ms365-auth.json"
-                persistence = PostgresCredentialStore.safe_status()
+                persistence = {**PostgresCredentialStore.safe_status(), "credential_version": version}
+                durable_store = store
             elif os.environ.get(M365_AUTH_JSON_ENV):
                 raw, state_path = _environment_credential()
                 credential_path = state_path or (default_beta_directory() / "ms365-auth.json")
@@ -747,10 +779,59 @@ class M365BearerBeta:
             credential_writer=writer,
             credential_backup=(durable_backup if directory is None and configured() else None),
             persistence_status=persistence,
+            durable_store=(durable_store if directory is None and configured() else None),
         )
 
+    @classmethod
+    def bootstrap_durable(
+        cls,
+        response: dict[str, Any],
+        *,
+        session_factory: Callable[[], Any] | None = None,
+    ) -> "M365BearerBeta":
+        """Seed an empty hosted store from the first dashboard import.
+
+        This is deliberately separate from ``from_directory``: an empty
+        database is a valid setup state, but credentials must still be
+        validated and encrypted before the provider can be constructed.
+        """
+
+        if not isinstance(response, dict):
+            raise BetaConfigurationError("credential import must be a JSON object")
+        from beta.m365_durable import PostgresCredentialStore, configured, required
+
+        if not required() or not configured():
+            raise DurabilityRequiredError(
+                "durable_credential_store_required: configure "
+                "CODEX_AUTH_M365_BETA_DATABASE_URL and "
+                "CODEX_AUTH_M365_BETA_CREDENTIAL_KEY"
+            )
+        candidate = dict(response)
+        candidate["captured_at"] = int(time.time())
+        # Validate tokens, scope, id-token claims, and route metadata before
+        # any database write.  _route_from_credential also supplies safe
+        # defaults for captures that omit duplicated broker fields.
+        BetaCredential.from_raw(candidate)
+        BetaRoute.from_raw(_route_from_credential(candidate))
+        store = PostgresCredentialStore()
+        try:
+            with store.locked_record() as (connection, current, version):
+                if current is not None:
+                    raise DurabilityRequiredError("credential_version_conflict")
+                store.save_locked(connection, candidate, version)
+        except DurabilityRequiredError:
+            raise
+        except Exception as exc:
+            raise DurabilityRequiredError("durability_unavailable") from exc
+        return cls.from_directory(session_factory=session_factory)
+
     def _persist_credential(self, value: dict[str, Any]) -> None:
-        if self._credential_writer is not None:
+        if self._active_durable_transaction is not None:
+            connection, version = self._active_durable_transaction
+            next_version = self._durable_store.save_locked(connection, value, version)
+            self._active_durable_transaction = (connection, next_version)
+            self.persistence_status["credential_version"] = next_version
+        elif self._credential_writer is not None:
             self._credential_writer(value)
         else:
             _atomic_write_json(self.credential_path, value)
@@ -790,6 +871,11 @@ class M365BearerBeta:
         return max(0, round(self.credential.expires_at - time.time()))
 
     def status(self) -> dict[str, Any]:
+        try:
+            from beta.m365_durable import required as durability_required
+            required_flag = durability_required()
+        except ImportError:  # pragma: no cover
+            required_flag = False
         refresh_terminal = self.last_refresh_error_code in {
             "invalid_grant:AADSTS70000",
         }
@@ -835,6 +921,7 @@ class M365BearerBeta:
             "last_connect_failure": self.last_connect_failure,
             "pre_submit_refreshes": self.pre_submit_refreshes,
             "generation_replay_policy": "never_after_submit",
+            "durability_required": required_flag,
             "credential_persistence": dict(self.persistence_status),
         }
 
@@ -924,10 +1011,27 @@ class M365BearerBeta:
             self._refresh_lock.release()
 
     def _refresh_serial(self) -> dict[str, Any]:
+        """Refresh under the hosted database lock when durable storage is active."""
+
+        if self._durable_store is None:
+            return self._refresh_serial_inner()
+        with self._durable_store.locked_record() as (connection, raw, version):
+            if raw is not None:
+                self.credential = BetaCredential.from_raw(raw)
+                self.route = BetaRoute.from_raw(_route_from_credential(raw))
+            self._active_durable_transaction = (connection, version)
+            try:
+                if raw is not None:
+                    self._durable_store.backup_locked(connection, "refresh")
+                return self._refresh_serial_inner()
+            finally:
+                self._active_durable_transaction = None
+
+    def _refresh_serial_inner(self) -> dict[str, Any]:
         self.refreshing = True
         session = None
         try:
-            if self._credential_backup is not None:
+            if self._credential_backup is not None and self._active_durable_transaction is None:
                 self._credential_backup("refresh")
             session = self._new_cookie_free_session()
             form = {**self.route.token_form, "grant_type": "refresh_token", "refresh_token": self.credential.refresh_token}

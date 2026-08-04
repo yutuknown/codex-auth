@@ -33,6 +33,7 @@ from beta.m365_artifacts import artifact_store
 from beta.m365_bearer import (
     BETA_CONFIRM_ENV,
     BetaConfigurationError,
+    DurabilityRequiredError,
     BetaUpstreamError,
     M365BearerBeta,
 )
@@ -1161,9 +1162,18 @@ def import_credentials(payload: dict[str, Any]) -> Any:
         value = payload.get("credential")
         if not isinstance(value, dict):
             raise BetaConfigurationError("credential must be a JSON object")
-        beta = M365BearerBeta.from_directory()
-        state = beta.replace_credential(value)
+        seeded = False
+        try:
+            beta = M365BearerBeta.from_directory()
+        except DurabilityRequiredError as exc:
+            if "bootstrap_required" not in str(exc):
+                raise
+            beta = M365BearerBeta.bootstrap_durable(value)
+            seeded = True
+        state = beta.status() if seeded else beta.replace_credential(value)
         return {"status": "ok", "provider": "m365-copilot", "credential": state, "secrets_returned": False}
+    except DurabilityRequiredError as exc:
+        return JSONResponse(status_code=503, content={"status": "error", "error": str(exc), "durability_required": True})
     except BetaConfigurationError as exc:
         return JSONResponse(status_code=400, content={"status": "error", "error": str(exc)})
     except BetaUpstreamError as exc:
@@ -1183,6 +1193,20 @@ def health() -> dict[str, Any]:
                 "verification_contract": VERIFICATION_CONTRACT_VERSION,
             },
         }
+    except DurabilityRequiredError as exc:
+        from beta.m365_durable import safe_expiry
+        return {
+            "status": "durability_unavailable",
+            "provider": "m365-copilot",
+            "cookie_count": 0,
+            "durability_required": True,
+            "durability_state": "setup_required" if "required" in str(exc) else "unavailable",
+            "configuration_error": str(exc),
+            "source": "none",
+            "restart_durable": False,
+            "database_expires_at": safe_expiry(),
+            "build": {"render_commit": running_commit(), "verification_contract": VERIFICATION_CONTRACT_VERSION},
+        }
     except BetaConfigurationError:
         return {"status": "not_configured", "provider": "m365-copilot", "cookie_count": 0}
 
@@ -1194,6 +1218,16 @@ def deployment_readiness() -> dict[str, Any]:
     try:
         beta = M365BearerBeta.from_directory()
         credential = beta.status()
+    except DurabilityRequiredError as exc:
+        return {
+            "ready": False,
+            "provider": "m365-copilot",
+            "generation": "durability_unavailable",
+            "file_input": "durability_unavailable",
+            "durability_required": True,
+            "durability_state": "setup_required" if "required" in str(exc) else "unavailable",
+            "warnings": [str(exc)],
+        }
     except BetaConfigurationError:
         return {
             "ready": False,
@@ -1359,6 +1393,8 @@ def refresh_token() -> Any:
             "provider": "m365-copilot",
             "credential": M365BearerBeta.from_directory().refresh(),
         }
+    except DurabilityRequiredError as exc:
+        return JSONResponse(status_code=503, content={"status": "error", "error": str(exc), "durability_required": True})
     except BetaConfigurationError as exc:
         return JSONResponse(
             status_code=503,
@@ -1683,6 +1719,17 @@ def dashboard_logout() -> JSONResponse:
 def _dashboard_overview() -> dict[str, Any]:
     try:
         credential = M365BearerBeta.from_directory().status()
+    except DurabilityRequiredError as exc:
+        credential = {
+            "state": "durability_unavailable",
+            "cookie_count": 0,
+            "generation_ready": False,
+            "refresh_ready": False,
+            "durability_required": True,
+            "durability_state": "setup_required" if "required" in str(exc) else "unavailable",
+            "configuration_error": str(exc),
+            "credential_persistence": {"source": "none", "restart_durable": False},
+        }
     except BetaConfigurationError:
         credential = {
             "state": "not_configured",
@@ -1817,13 +1864,27 @@ def dashboard_import_credentials(payload: dict[str, Any]) -> Any:
         value = payload.get("credential")
         if not isinstance(value, dict):
             raise BetaConfigurationError("credential must be a JSON object")
-        status = M365BearerBeta.from_directory().replace_credential(value)
+        try:
+            beta = M365BearerBeta.from_directory()
+        except DurabilityRequiredError as exc:
+            if "bootstrap_required" not in str(exc):
+                raise
+            beta = M365BearerBeta.bootstrap_durable(value)
+            return {
+                "status": "ok",
+                "provider": "m365-copilot",
+                "credential": beta.status(),
+                "secrets_returned": False,
+            }
+        status = beta.replace_credential(value)
         return {
             "status": "ok",
             "provider": "m365-copilot",
             "credential": status,
             "secrets_returned": False,
         }
+    except DurabilityRequiredError as exc:
+        return JSONResponse(status_code=503, content={"status": "error", "error": str(exc), "durability_required": True})
     except BetaConfigurationError as exc:
         return JSONResponse(status_code=400, content={"status": "error", "error": str(exc)})
     except BetaUpstreamError as exc:
@@ -1838,6 +1899,8 @@ def dashboard_refresh() -> Any:
             "provider": "m365-copilot",
             "credential": M365BearerBeta.from_directory().refresh(),
         }
+    except DurabilityRequiredError as exc:
+        return JSONResponse(status_code=503, content={"status": "error", "error": str(exc), "durability_required": True})
     except BetaConfigurationError as exc:
         return JSONResponse(status_code=409, content={"status": "error", "error": str(exc)})
     except BetaUpstreamError as exc:

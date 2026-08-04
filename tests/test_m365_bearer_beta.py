@@ -10,6 +10,7 @@ from beta import m365_bearer
 from beta.m365_bearer import (
     M365_GRAPH_REFRESH_SCOPE,
     BetaConfigurationError,
+    DurabilityRequiredError,
     BetaCredential,
     BetaRoute,
     BetaUpstreamError,
@@ -94,6 +95,58 @@ def test_environment_credential_rotation_uses_explicit_state_file(monkeypatch, t
         "rotation_persistence": "state_file",
         "restart_durable": True,
     }
+
+
+def test_hosted_required_mode_fails_closed_without_database(monkeypatch):
+    monkeypatch.setenv(m365_bearer.M365_AUTH_JSON_ENV, json.dumps(configured_raw()))
+    monkeypatch.setenv("CODEX_AUTH_M365_BETA_REQUIRE_DURABLE", "1")
+    monkeypatch.delenv("CODEX_AUTH_M365_BETA_DATABASE_URL", raising=False)
+    monkeypatch.delenv("CODEX_AUTH_M365_BETA_CREDENTIAL_KEY", raising=False)
+    monkeypatch.setattr(m365_bearer, "_RUNTIME_CREDENTIAL", None)
+
+    with pytest.raises(DurabilityRequiredError, match="durable_credential_store_required"):
+        M365BearerBeta.from_directory()
+
+
+def test_durable_bootstrap_is_one_time_and_does_not_fallback_to_environment(monkeypatch):
+    class FakeStore:
+        record = None
+        version = None
+
+        def __init__(self):
+            pass
+
+        def load(self):
+            return (dict(self.record), self.version) if self.record is not None else (None, None)
+
+        def save(self, value, expected_version=None):
+            if expected_version is not None and expected_version != self.version:
+                raise RuntimeError("credential_version_conflict")
+            type(self).record = dict(value)
+            type(self).version = (self.version or 0) + 1
+            return self.version
+
+        def backup_current(self, reason):
+            return self.version
+
+        @staticmethod
+        def safe_status():
+            return {"source": "encrypted_external_postgres", "restart_durable": True}
+
+    import beta.m365_durable as durable
+    monkeypatch.setattr(durable, "PostgresCredentialStore", FakeStore)
+    monkeypatch.setenv("CODEX_AUTH_M365_BETA_DATABASE_URL", "postgres://test")
+    monkeypatch.setenv("CODEX_AUTH_M365_BETA_CREDENTIAL_KEY", "test-key")
+    monkeypatch.setenv(m365_bearer.M365_AUTH_JSON_ENV, json.dumps(configured_raw(access_token="seed")))
+    monkeypatch.setattr(m365_bearer, "_RUNTIME_CREDENTIAL", None)
+
+    first = M365BearerBeta.from_directory()
+    assert first.credential.access_token == "seed"
+    monkeypatch.setenv(m365_bearer.M365_AUTH_JSON_ENV, json.dumps(configured_raw(access_token="stale")))
+    monkeypatch.setattr(m365_bearer, "_RUNTIME_CREDENTIAL", None)
+    second = M365BearerBeta.from_directory()
+    assert second.credential.access_token == "seed"
+    assert second.status()["credential_persistence"]["credential_version"] == 1
 
 
 def encoded_id_token(**overrides):

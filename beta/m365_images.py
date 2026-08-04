@@ -13,6 +13,7 @@ from curl_cffi import CurlMime
 from curl_cffi.requests import Session
 
 from beta.m365_bearer import (
+    EXPIRING_SOON_SECONDS,
     USER_AGENT,
     BetaConfigurationError,
     BetaCredential,
@@ -61,7 +62,13 @@ class M365SubstrateImageUploader:
         *,
         session_factory: Callable[[], Any] | None = None,
     ) -> "M365SubstrateImageUploader":
-        raw = M365BearerBeta.from_directory(directory).credential.raw
+        beta = M365BearerBeta.from_directory(directory)
+        # Attachments are uploaded before the SignalR generation transport is
+        # opened.  Enforce the same pre-submit freshness contract here so an
+        # expired/near-expiry bearer is refreshed before UploadFile sees it.
+        if beta.seconds_until_expiry <= EXPIRING_SOON_SECONDS:
+            beta.refresh()
+        raw = beta.credential.raw
         return cls(
             BetaCredential.from_raw(raw),
             BetaRoute.from_raw(_route_from_credential(raw)),

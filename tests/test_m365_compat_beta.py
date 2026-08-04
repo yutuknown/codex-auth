@@ -22,6 +22,7 @@ from beta.m365_compat import (
     normalize_public_event,
     root_head,
 )
+from beta.m365_conversations import ConversationCoordinator
 from beta.m365_models import M365ModelCatalog
 
 
@@ -610,6 +611,35 @@ def test_openai_endpoint_streams_reasoning_content(monkeypatch):
     assert '"reasoning_content":"Checking"' in body
     assert '"content":"Answer"' in body
     assert body.endswith("data: [DONE]\n\n")
+
+
+def test_openai_buffered_duplicate_returns_cached_response(monkeypatch):
+    calls = 0
+
+    async def provider_events(prompt, model, attachments=None, conversation_token=None):
+        nonlocal calls
+        calls += 1
+        yield {"type": "text_delta", "delta": "one answer"}
+
+    monkeypatch.setattr(compat, "_provider_events", provider_events)
+    monkeypatch.setattr(compat, "coordinator", ConversationCoordinator(secret="api-cache"))
+    payload = {
+        "model": "auto",
+        "conversation": "same-client-chat",
+        "messages": [{"role": "user", "content": "same prompt"}],
+    }
+
+    async def call_twice():
+        return (
+            await compat.openai_chat_completions(dict(payload)),
+            await compat.openai_chat_completions(dict(payload)),
+        )
+
+    first, second = asyncio.run(call_twice())
+
+    assert calls == 1
+    assert second == first
+    assert second["choices"][0]["message"]["content"] == "one answer"
 
 
 def test_models_endpoint_returns_source_labelled_availability(monkeypatch):

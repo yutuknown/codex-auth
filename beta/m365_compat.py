@@ -1040,6 +1040,7 @@ def _conversation_token(
     prepared: PreparedM365Conversation,
     http_request: Request = None,
     model: str | None = None,
+    request_kind: str = "chat_completions",
 ) -> dict[str, Any]:
     """Resolve an opaque proxy key; prompts only enter the HMAC, never state."""
 
@@ -1056,7 +1057,7 @@ def _conversation_token(
     return coordinator.acquire(
         explicit_id=str(explicit) if explicit else None,
         first_user_text=first_user,
-        request_text=prepared.prompt,
+        request_text=f"{request_kind}\0{prepared.prompt}",
         turn_hashes=tuple(
             hashlib.sha256(f"{turn.role}\0{turn.text}".encode()).hexdigest()
             for turn in prepared.turns
@@ -1409,9 +1410,15 @@ async def anthropic_messages(request: dict[str, Any], http_request: Request = No
         )
     model = str(request.get("model") or "auto")
     try:
-        conversation_token = _conversation_token(request, prepared, http_request, model)
+        conversation_token = _conversation_token(request, prepared, http_request, model, "anthropic_messages")
+        if request.get("stream") and conversation_token.get("cached_response") is not None:
+            raise ConversationConflict("conversation_request_already_completed")
+        if conversation_token.get("cached_response") is not None:
+            return conversation_token["cached_response"]
         prompt = _continuation_prompt(prepared, conversation_token)
     except ConversationConflict as exc:
+        if "conversation_token" in locals():
+            coordinator.fail(conversation_token)
         return JSONResponse(status_code=409, content={"type": "error", "error": {"type": "conflict_error", "message": str(exc)}})
     if request.get("stream"):
         try:
@@ -1451,7 +1458,7 @@ async def anthropic_messages(request: dict[str, Any], http_request: Request = No
     if text:
         content.append({"type": "text", "text": text})
     usage = _usage_estimate(prompt, reasoning + text)
-    return {
+    response = {
         "id": f"msg_{uuid.uuid4().hex}",
         "type": "message",
         "role": "assistant",
@@ -1469,6 +1476,8 @@ async def anthropic_messages(request: dict[str, Any], http_request: Request = No
         },
         "provider_metadata": {**prepared.safe_status(), "conversation": coordinator.public_metadata(conversation_token)},
     }
+    coordinator.complete(conversation_token, result={"response": response})
+    return response
 
 
 @app.post("/v1/chat/completions")
@@ -1490,9 +1499,15 @@ async def openai_chat_completions(request: dict[str, Any], http_request: Request
         )
     model = str(request.get("model") or "auto")
     try:
-        conversation_token = _conversation_token(request, prepared, http_request, model)
+        conversation_token = _conversation_token(request, prepared, http_request, model, "chat_completions")
+        if request.get("stream") and conversation_token.get("cached_response") is not None:
+            raise ConversationConflict("conversation_request_already_completed")
+        if conversation_token.get("cached_response") is not None:
+            return conversation_token["cached_response"]
         prompt = _continuation_prompt(prepared, conversation_token)
     except ConversationConflict as exc:
+        if "conversation_token" in locals():
+            coordinator.fail(conversation_token)
         return JSONResponse(status_code=409, content={"error": {"type": "conflict_error", "message": str(exc)}})
     if request.get("stream"):
         try:
@@ -1526,7 +1541,7 @@ async def openai_chat_completions(request: dict[str, Any], http_request: Request
         )
     reasoning, text = _collect_content(events)
     usage = _usage_estimate(prompt, reasoning + text)
-    return {
+    response = {
         "id": f"chatcmpl_{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": int(time.time()),
@@ -1553,6 +1568,8 @@ async def openai_chat_completions(request: dict[str, Any], http_request: Request
         },
         "provider_metadata": {**prepared.safe_status(), "conversation": coordinator.public_metadata(conversation_token)},
     }
+    coordinator.complete(conversation_token, result={"response": response})
+    return response
 
 
 @app.post("/v1/responses")
@@ -1567,9 +1584,15 @@ async def openai_responses(request: dict[str, Any], http_request: Request = None
         )
         prompt, attachments = prepared
         model = str(request.get("model") or "auto")
-        conversation_token = _conversation_token(request, prepared, http_request, model)
+        conversation_token = _conversation_token(request, prepared, http_request, model, "responses")
+        if request.get("stream") and conversation_token.get("cached_response") is not None:
+            raise ConversationConflict("conversation_request_already_completed")
+        if conversation_token.get("cached_response") is not None:
+            return conversation_token["cached_response"]
         prompt = _continuation_prompt(prepared, conversation_token)
     except ConversationConflict as exc:
+        if "conversation_token" in locals():
+            coordinator.fail(conversation_token)
         return JSONResponse(status_code=409, content={"error": {"type": "conflict_error", "message": str(exc)}})
     except BetaConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1604,7 +1627,7 @@ async def openai_responses(request: dict[str, Any], http_request: Request = None
         output.append({"id": f"rs_{uuid.uuid4().hex}", "type": "reasoning", "summary": [{"type": "summary_text", "text": reasoning}]})
     output.append({"id": f"msg_{uuid.uuid4().hex}", "type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": text, "annotations": []}]})
     usage = _usage_estimate(prompt, reasoning + text)
-    return {
+    response = {
         "id": f"resp_{uuid.uuid4().hex}",
         "object": "response",
         "created_at": int(time.time()),
@@ -1614,6 +1637,8 @@ async def openai_responses(request: dict[str, Any], http_request: Request = None
         "usage": {"input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"], "total_tokens": usage["total_tokens"]},
         "provider_metadata": {"m365": {**prepared.safe_status(), "conversation": coordinator.public_metadata(conversation_token), "reasoning": _reasoning_contract()}},
     }
+    coordinator.complete(conversation_token, result={"response": response})
+    return response
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

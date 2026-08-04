@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+import beta.m365_images as images
 from beta.m365_bearer import (
     BetaConfigurationError,
     BetaCredential,
@@ -153,6 +154,39 @@ def test_substrate_image_upload_uses_bearer_without_cookies():
     assert "image-access-secret" not in json.dumps(
         attachment.message_annotation()
     )
+
+
+def test_image_uploader_refreshes_before_loading_expired_bearer(monkeypatch):
+    class FakeBeta:
+        seconds_until_expiry = 0
+
+        def __init__(self):
+            self.refresh_calls = 0
+            self.credential = type("Credential", (), {"raw": credential().raw})()
+
+        def refresh(self):
+            self.refresh_calls += 1
+            return {"state": "active"}
+
+    beta = FakeBeta()
+    monkeypatch.setattr(images.M365BearerBeta, "from_directory", lambda directory=None: beta)
+    monkeypatch.setattr(
+        images,
+        "_route_from_credential",
+        lambda raw: {
+            "identity": "user@example.test",
+            "oauth": {
+                "token_endpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+                "query": {},
+                "form": {"client_id": "client"},
+            },
+        },
+    )
+
+    uploader = M365SubstrateImageUploader.from_directory()
+
+    assert beta.refresh_calls == 1
+    assert uploader.credential.access_token == "image-access-secret"
 
 
 def test_substrate_image_upload_rejects_non_image_mime_type():

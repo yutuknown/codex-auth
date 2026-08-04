@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import threading
 import time
@@ -21,6 +22,7 @@ MAX_CONVERSATIONS = 1_000
 CONVERSATION_TTL_SECONDS = 30 * 24 * 60 * 60
 DEFAULT_UPSTREAM_MAX_TURNS = 24
 ROLLOVER_CONTEXT_TURNS = 6
+MAX_CACHED_RESPONSE_BYTES = 512 * 1024
 
 
 class ConversationConflict(RuntimeError):
@@ -144,6 +146,21 @@ class ConversationCoordinator:
                     item.upstream_turns = len(turn_hashes) - delta_start
             if request_id in item.in_flight:
                 raise ConversationConflict("conversation_request_in_progress")
+            completed = item.completed.get(request_id)
+            if completed is not None:
+                cached_response = completed.get("response")
+                if isinstance(cached_response, dict):
+                    # JSON round-tripping prevents callers from mutating the
+                    # coordinator's bounded cached copy.
+                    return {
+                        "proxy_id": item.proxy_id,
+                        "upstream_id": item.upstream_id,
+                        "request_hash": request_id,
+                        "delta_start": delta_start,
+                        "continuity": "cached",
+                        "cached_response": json.loads(json.dumps(cached_response)),
+                    }
+                raise ConversationConflict("conversation_request_already_completed")
             item.in_flight.add(request_id)
             item.updated_at = now
             item.last_request_hash = request_id
@@ -169,7 +186,9 @@ class ConversationCoordinator:
                     item.updated_at = self._now()
                     # A bounded safe result only; caller content never enters this cache.
                     if result is not None:
-                        item.completed[token["request_hash"]] = dict(result)
+                        safe_result = json.loads(json.dumps(result))
+                        if len(json.dumps(safe_result, separators=(",", ":")).encode()) <= MAX_CACHED_RESPONSE_BYTES:
+                            item.completed[token["request_hash"]] = safe_result
                         while len(item.completed) > 8:
                             item.completed.pop(next(iter(item.completed)))
                     return

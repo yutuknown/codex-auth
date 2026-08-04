@@ -26,6 +26,32 @@ def test_conversation_coordinator_reuses_upstream_id_and_blocks_inflight_duplica
         coordinator.acquire(explicit_id="thread", first_user_text="other", request_text="turn two")
 
 
+def test_conversation_coordinator_returns_bounded_completed_response_copy():
+    coordinator = ConversationCoordinator(secret="cache", now=lambda: 100)
+    first = coordinator.acquire(
+        explicit_id="thread",
+        first_user_text="first",
+        request_text="chat_completions\0same request",
+    )
+    response = {"object": "chat.completion", "choices": [{"message": {"content": "answer"}}]}
+    coordinator.complete(first, result={"response": response})
+
+    duplicate = coordinator.acquire(
+        explicit_id="thread",
+        first_user_text="first",
+        request_text="chat_completions\0same request",
+    )
+    duplicate["cached_response"]["choices"][0]["message"]["content"] = "changed"
+    repeated = coordinator.acquire(
+        explicit_id="thread",
+        first_user_text="first",
+        request_text="chat_completions\0same request",
+    )
+
+    assert duplicate["continuity"] == "cached"
+    assert repeated["cached_response"]["choices"][0]["message"]["content"] == "answer"
+
+
 def test_first_user_fallback_is_hmaced_not_plaintext():
     coordinator = ConversationCoordinator(secret="test")
     token = coordinator.acquire(explicit_id=None, first_user_text="private prompt", request_text="private prompt")
